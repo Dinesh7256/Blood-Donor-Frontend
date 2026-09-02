@@ -2,7 +2,7 @@ import client from './client.js';
 
 export const donorApi = {
   searchDonors: async (bloodGroup, radiusKm) => {
-    const response = await client.get('/donors/search', {
+    const response = await client.get('/donors', {
       params: {
         bloodGroup,
         radius: radiusKm,

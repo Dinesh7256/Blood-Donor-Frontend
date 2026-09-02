@@ -1,4 +1,5 @@
-export const API_BASE_URL = 'http://10.0.2.2:5000/api';
+export const API_BASE_URL = 'http://10.137.236.48:3000/api';
+// http://10.0.2.2:3000/api 
 
 export const FIREBASE_CONFIG = {
   apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY || '',

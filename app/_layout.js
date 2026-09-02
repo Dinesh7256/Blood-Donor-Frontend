@@ -1,6 +1,5 @@
 import { useEffect } from 'react';
-import { Stack } from 'expo-router';
-import { useRouter, useSegments } from 'expo-router';
+import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { AuthProvider, useAuth } from '../src/context/AuthContext.js';
@@ -42,7 +41,8 @@ function RootLayoutContent() {
         router.replace('/(auth)/');
       }
     }
-  }, [user, isLoading, segments]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, isLoading]);
 
   // While authentication state is being determined, show nothing
   // (splash screen will be visible)

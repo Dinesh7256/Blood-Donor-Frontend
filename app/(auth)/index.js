@@ -6,14 +6,15 @@ export default function AuthIndex() {
   const { user } = useAuth();
 
   useEffect(() => {
-    // This index file is a placeholder. The actual routing happens in root _layout.js
-    // If somehow we end up here with a user, redirect to app
+    // If user is logged in, redirect to app
     if (user) {
       router.replace('/(app)/');
+    } else {
+      // Otherwise, redirect to login
+      router.replace('/(auth)/login');
     }
   }, [user]);
 
-  // Render nothing - the root layout will redirect before this mounts
-  // or a login screen will be implemented here later
+  // Render nothing - redirecting
   return null;
 }
