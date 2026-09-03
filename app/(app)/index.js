@@ -8,15 +8,20 @@ import {
   Alert,
 } from 'react-native';
 import { useAuth } from '../../src/context/AuthContext.js';
+import { auth } from '../../src/config/firebase.js';
 import { locationService } from '../../src/services/locationService.js';
 import { userApi } from '../../src/api/userApi.js';
 import { donorApi } from '../../src/api/donorApi.js';
-import { auth } from '../../src/config/firebase.js';
 
 const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
 
+const hasLiveFirebaseSession = async () => {
+  await auth.authStateReady();
+  return !!auth.currentUser;
+};
+
 export default function HomeScreen() {
-  const { logout, isAuthReady, user } = useAuth();
+  const { logout, isAuthReady, isFirebaseAuthenticated, user } = useAuth();
 
   const [selectedBloodGroup, setSelectedBloodGroup] = useState('A+');
   const [donors, setDonors] = useState([]);
@@ -24,7 +29,7 @@ export default function HomeScreen() {
   const [locationLoading, setLocationLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  const isAuthenticated = isAuthReady && !!user && !!auth.currentUser;
+  const isAuthenticated = isAuthReady && isFirebaseAuthenticated && Boolean(user);
 
   // Get location and update backend, then search donors
   const initializeHome = useCallback(async () => {
@@ -38,7 +43,6 @@ export default function HomeScreen() {
       try {
         location = await locationService.getCurrentLocation();
       } catch (_locationError) {
-        // Permission denied or location failure
         setLocationLoading(false);
         Alert.alert(
           'Location Required',
@@ -50,10 +54,21 @@ export default function HomeScreen() {
       }
       setLocationLoading(false);
 
+      if (!(await hasLiveFirebaseSession())) {
+        setLoading(false);
+        return;
+      }
+
       // Step 2: Update location in backend
+      let locationUpdated = false;
       try {
         await userApi.updateLocation(location.latitude, location.longitude);
+        locationUpdated = true;
       } catch (updateError) {
+        if (!(await hasLiveFirebaseSession())) {
+          setLoading(false);
+          return;
+        }
         console.error('Failed to update location:', updateError);
         Alert.alert(
           'Error',
@@ -64,11 +79,20 @@ export default function HomeScreen() {
         return;
       }
 
+      if (!locationUpdated || !(await hasLiveFirebaseSession())) {
+        setLoading(false);
+        return;
+      }
+
       // Step 3: Search donors with default blood group
       try {
         const result = await donorApi.searchDonors(selectedBloodGroup, 10);
         setDonors(result.data || []);
       } catch (searchError) {
+        if (!(await hasLiveFirebaseSession())) {
+          setLoading(false);
+          return;
+        }
         console.error('Failed to search donors:', searchError);
         Alert.alert(
           'Error',
@@ -108,7 +132,7 @@ export default function HomeScreen() {
 
   // Search donors when blood group changes
   const handleBloodGroupChange = useCallback(async (bloodGroup) => {
-    if (!isAuthenticated) {
+    if (!(await hasLiveFirebaseSession())) {
       return;
     }
 
@@ -120,13 +144,16 @@ export default function HomeScreen() {
       const result = await donorApi.searchDonors(bloodGroup, 10);
       setDonors(result.data || []);
     } catch (err) {
+      if (!(await hasLiveFirebaseSession())) {
+        return;
+      }
       console.error('Failed to search donors:', err);
       setError('Failed to search donors');
       setDonors([]);
     } finally {
       setLoading(false);
     }
-  }, [isAuthenticated]);
+  }, []);
 
   const handleLogout = async () => {
     try {
@@ -144,7 +171,7 @@ export default function HomeScreen() {
     );
   }
 
-  if (!auth.currentUser) {
+  if (!isFirebaseAuthenticated) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#208AEF" />

@@ -10,9 +10,12 @@ SplashScreen.preventAutoHideAsync().catch(() => {
 });
 
 function RootLayoutContent() {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, isAuthReady, isFirebaseAuthenticated } = useAuth();
   const segments = useSegments();
   const router = useRouter();
+
+  const isFullyAuthenticated =
+    isAuthReady && isFirebaseAuthenticated && Boolean(user);
 
   useEffect(() => {
     // Hide splash screen once auth state is determined
@@ -24,25 +27,23 @@ function RootLayoutContent() {
   }, [isLoading]);
 
   useEffect(() => {
-    // If still loading, don't redirect
-    if (isLoading) return;
+    if (isLoading || !isAuthReady) return;
 
     const inAuthGroup = segments[0] === '(auth)';
     const inAppGroup = segments[0] === '(app)';
 
-    if (user) {
-      // User is logged in, ensure they're in the app group
+    if (isFullyAuthenticated) {
       if (!inAppGroup) {
         router.replace('/(app)/');
       }
-    } else {
-      // User is not logged in, ensure they're in the auth group
-      if (!inAuthGroup) {
-        router.replace('/(auth)/');
-      }
+      return;
+    }
+
+    if (!inAuthGroup) {
+      router.replace('/(auth)/');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, isLoading]);
+  }, [user, isLoading, isAuthReady, isFirebaseAuthenticated, isFullyAuthenticated]);
 
   // While authentication state is being determined, show nothing
   // (splash screen will be visible)

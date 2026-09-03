@@ -9,19 +9,39 @@ const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
+  const [firebaseUser, setFirebaseUser] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const authOperationInProgress = useRef(false);
 
+  const ensureFirebaseSession = async (expectedUid) => {
+    await auth.authStateReady();
+
+    const currentUser = auth.currentUser;
+
+    if (!currentUser) {
+      throw new Error('Firebase authentication failed');
+    }
+
+    if (expectedUid && currentUser.uid !== expectedUid) {
+      throw new Error('Firebase authentication mismatch');
+    }
+
+    setFirebaseUser(currentUser);
+    return currentUser;
+  };
+
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (nextFirebaseUser) => {
       try {
-        if (firebaseUser) {
+        setFirebaseUser(nextFirebaseUser);
+
+        if (nextFirebaseUser) {
           const cachedUser = await AsyncStorage.getItem('user');
           if (cachedUser) {
             setUser(JSON.parse(cachedUser));
           } else {
-            setUser({ uid: firebaseUser.uid, email: firebaseUser.email });
+            setUser({ uid: nextFirebaseUser.uid, email: nextFirebaseUser.email });
           }
         } else if (!authOperationInProgress.current) {
           setUser(null);
@@ -30,6 +50,7 @@ export const AuthProvider = ({ children }) => {
       } catch (error) {
         console.error('Error in auth state listener:', error);
         if (!authOperationInProgress.current) {
+          setFirebaseUser(null);
           setUser(null);
         }
       } finally {
@@ -49,7 +70,11 @@ export const AuthProvider = ({ children }) => {
     try {
       setIsLoading(true);
 
-      const { idToken } = await authApi.firebaseRegister(email, password);
+      const { idToken, user: firebaseAuthUser } = await authApi.firebaseRegister(
+        email,
+        password
+      );
+      await ensureFirebaseSession(firebaseAuthUser.uid);
 
       const response = await authApi.registerUser(idToken, name);
       if (!response.success || !response.data) {
@@ -88,7 +113,8 @@ export const AuthProvider = ({ children }) => {
     try {
       setIsLoading(true);
 
-      const { idToken } = await authApi.firebaseLogin(email, password);
+      const { idToken, user: firebaseAuthUser } = await authApi.firebaseLogin(email, password);
+      await ensureFirebaseSession(firebaseAuthUser.uid);
 
       const response = await authApi.loginUser(idToken);
       if (!response.success || !response.data) {
@@ -115,6 +141,7 @@ export const AuthProvider = ({ children }) => {
     try {
       setIsLoading(true);
       await auth.signOut();
+      setFirebaseUser(null);
       setUser(null);
       await AsyncStorage.removeItem('user');
     } catch (error) {
@@ -126,10 +153,18 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const isFirebaseAuthenticated =
+    isAuthReady &&
+    !!auth.currentUser &&
+    !!firebaseUser &&
+    firebaseUser.uid === auth.currentUser.uid;
+
   const value = {
     user,
+    firebaseUser,
     isLoading,
     isAuthReady,
+    isFirebaseAuthenticated,
     register,
     login,
     logout,
