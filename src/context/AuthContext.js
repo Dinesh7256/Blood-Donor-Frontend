@@ -4,6 +4,7 @@ import { auth } from '../config/firebase.js';
 import { onAuthStateChanged } from '@firebase/auth';
 import { authApi } from '../api/authApi.js';
 import client from '../api/client.js';
+import { notificationService } from '../services/notificationService.js';
 
 const AuthContext = createContext();
 
@@ -140,6 +141,7 @@ export const AuthProvider = ({ children }) => {
 
     try {
       setIsLoading(true);
+      await notificationService.unregisterDeviceTokenFromBackend();
       await auth.signOut();
       setFirebaseUser(null);
       setUser(null);

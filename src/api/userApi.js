@@ -19,8 +19,15 @@ export const userApi = {
     return response.data;
   },
 
-  saveDeviceToken: async (token) => {
-    const response = await client.post('/users/device-token', { fcmToken: token });
+  registerDeviceToken: async (token) => {
+    const response = await client.put('/users/device-token', { token });
+    return response.data;
+  },
+
+  removeDeviceToken: async (token) => {
+    const response = await client.delete('/users/device-token', {
+      data: { token },
+    });
     return response.data;
   },
 };

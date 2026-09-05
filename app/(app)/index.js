@@ -15,9 +15,47 @@ import { donorApi } from '../../src/api/donorApi.js';
 
 const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
 
+/** Survives Home remounts (e.g. dev double-mount); reset when auth session ends. */
+const homeInitSession = {
+  inProgress: false,
+  completed: false,
+};
+
+const resetHomeInitSession = () => {
+  homeInitSession.inProgress = false;
+  homeInitSession.completed = false;
+};
+
+const tryBeginHomeInitSession = () => {
+  if (homeInitSession.inProgress || homeInitSession.completed) {
+    return false;
+  }
+  homeInitSession.inProgress = true;
+  return true;
+};
+
+const markHomeInitSessionCompleted = () => {
+  homeInitSession.completed = true;
+};
+
+const endHomeInitSessionInProgress = () => {
+  homeInitSession.inProgress = false;
+};
+
 const hasLiveFirebaseSession = async () => {
   await auth.authStateReady();
   return !!auth.currentUser;
+};
+
+const waitForLiveFirebaseSession = async (maxAttempts = 10, delayMs = 200) => {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await auth.authStateReady();
+    if (auth.currentUser) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  return false;
 };
 
 export default function HomeScreen() {
@@ -32,7 +70,20 @@ export default function HomeScreen() {
   const isAuthenticated = isAuthReady && isFirebaseAuthenticated && Boolean(user);
 
   // Get location and update backend, then search donors
-  const initializeHome = useCallback(async () => {
+  const initializeHome = useCallback(async (bloodGroup) => {
+    if (!tryBeginHomeInitSession()) {
+      if (__DEV__) {
+        console.log(
+          '[LOCATION DEBUG] Home initialization skipped (already in progress or completed)'
+        );
+      }
+      return;
+    }
+
+    if (__DEV__) {
+      console.log('[LOCATION DEBUG] Home initialization started');
+    }
+
     setLoading(true);
     setError(null);
 
@@ -42,19 +93,32 @@ export default function HomeScreen() {
       let location;
       try {
         location = await locationService.getCurrentLocation();
-      } catch (_locationError) {
+      } catch (locationError) {
+        console.error('[LOCATION ERROR]', locationError);
         setLocationLoading(false);
         Alert.alert(
           'Location Required',
           'Location permission is required to find nearby donors. Please enable location access in settings and try again.',
           [{ text: 'OK' }]
         );
-        setLoading(false);
         return;
       }
       setLocationLoading(false);
 
-      if (!(await hasLiveFirebaseSession())) {
+      const hasFirebaseSession = await waitForLiveFirebaseSession();
+
+      if (__DEV__) {
+        console.log(
+          `[LOCATION DEBUG] Firebase session ready for location update = ${hasFirebaseSession}`
+        );
+      }
+
+      if (!hasFirebaseSession) {
+        Alert.alert(
+          'Authentication',
+          'Sign-in is still completing. Please wait a moment and reopen the app if location cannot be saved.',
+          [{ text: 'OK' }]
+        );
         setLoading(false);
         return;
       }
@@ -62,14 +126,25 @@ export default function HomeScreen() {
       // Step 2: Update location in backend
       let locationUpdated = false;
       try {
+        if (__DEV__) {
+          console.log('[LOCATION DEBUG] updating backend location');
+        }
         await userApi.updateLocation(location.latitude, location.longitude);
         locationUpdated = true;
+        if (__DEV__) {
+          console.log('[LOCATION DEBUG] backend location update successful');
+        }
       } catch (updateError) {
         if (!(await hasLiveFirebaseSession())) {
           setLoading(false);
           return;
         }
-        console.error('Failed to update location:', updateError);
+        console.error('[LOCATION ERROR]', updateError);
+        if (__DEV__) {
+          console.log(
+            `[LOCATION DEBUG] backend location update failed = ${updateError.message || 'unknown error'}`
+          );
+        }
         Alert.alert(
           'Error',
           'Failed to update your location. Please try again.',
@@ -86,14 +161,22 @@ export default function HomeScreen() {
 
       // Step 3: Search donors with default blood group
       try {
-        const result = await donorApi.searchDonors(selectedBloodGroup, 10);
+        if (__DEV__) {
+          console.log('[LOCATION DEBUG] donor search starting');
+        }
+        const result = await donorApi.searchDonors(bloodGroup, 10);
         setDonors(result.data || []);
+        if (__DEV__) {
+          console.log(
+            `[LOCATION DEBUG] donor search result count = ${(result.data || []).length}`
+          );
+        }
+        markHomeInitSessionCompleted();
       } catch (searchError) {
         if (!(await hasLiveFirebaseSession())) {
-          setLoading(false);
           return;
         }
-        console.error('Failed to search donors:', searchError);
+        console.error('[LOCATION ERROR]', searchError);
         Alert.alert(
           'Error',
           'Failed to search for donors. Please try again.',
@@ -102,33 +185,41 @@ export default function HomeScreen() {
         setDonors([]);
       }
     } catch (err) {
-      console.error('Initialization error:', err);
+      console.error('[LOCATION ERROR]', err);
       setError('An unexpected error occurred');
     } finally {
       setLoading(false);
+      setLocationLoading(false);
+      endHomeInitSessionInProgress();
     }
-  }, [selectedBloodGroup]);
+  }, []);
 
-  // Run initialization only when Firebase auth and app user state are ready
+  // Run initialization once when Firebase auth and app user state are ready
   useEffect(() => {
+    if (__DEV__) {
+      console.log(`[LOCATION DEBUG] auth ready = ${isAuthReady}`);
+      console.log(`[LOCATION DEBUG] firebase authenticated = ${isFirebaseAuthenticated}`);
+      console.log(`[LOCATION DEBUG] backend user exists = ${Boolean(user)}`);
+    }
+
     if (!isAuthenticated) {
+      resetHomeInitSession();
+      if (__DEV__) {
+        console.log('[LOCATION DEBUG] Home initialization skipped (not fully authenticated yet)');
+      }
       return undefined;
     }
 
-    let cancelled = false;
-
-    const runInitialization = async () => {
-      if (!cancelled) {
-        await initializeHome();
-      }
-    };
-
-    runInitialization();
+    const timeoutId = setTimeout(() => {
+      void initializeHome(selectedBloodGroup);
+    }, 0);
 
     return () => {
-      cancelled = true;
+      clearTimeout(timeoutId);
     };
-  }, [initializeHome, isAuthenticated]);
+    // Run once per authenticated session; blood-group changes use handleBloodGroupChange.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]);
 
   // Search donors when blood group changes
   const handleBloodGroupChange = useCallback(async (bloodGroup) => {

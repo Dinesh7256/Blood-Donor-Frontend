@@ -1,8 +1,11 @@
+import '../src/messaging/registerBackgroundHandler.js';
 import { useEffect } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { AuthProvider, useAuth } from '../src/context/AuthContext.js';
+import { usePushNotificationRegistration } from '../src/hooks/usePushNotificationRegistration.js';
+import { useNotificationHandlers } from '../src/hooks/useNotificationHandlers.js';
 
 // Keep the splash screen visible while we load authentication state
 SplashScreen.preventAutoHideAsync().catch(() => {
@@ -16,6 +19,9 @@ function RootLayoutContent() {
 
   const isFullyAuthenticated =
     isAuthReady && isFirebaseAuthenticated && Boolean(user);
+
+  usePushNotificationRegistration(isFullyAuthenticated);
+  useNotificationHandlers(isFullyAuthenticated);
 
   useEffect(() => {
     // Hide splash screen once auth state is determined

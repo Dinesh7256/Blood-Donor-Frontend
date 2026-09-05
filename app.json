@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "blood-donor-frontend",
+    "name": "Blood Donor Finder",
     "slug": "blood-donor-frontend",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -11,6 +11,14 @@
       "icon": "./assets/expo.icon"
     },
     "android": {
+      "versionCode": 1,
+      "package": "com.blooddonor.finder",
+      "googleServicesFile": "./google-services.json",
+      "permissions": [
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -25,6 +33,7 @@
     },
     "plugins": [
       "expo-router",
+      "expo-dev-client",
       [
         "expo-splash-screen",
         {
@@ -32,7 +41,15 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
-      ]
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Blood Donor Finder to use your location to find nearby donors."
+        }
+      ],
+      "@react-native-firebase/app",
+      "@react-native-firebase/messaging"
     ],
     "experiments": {
       "typedRoutes": true,
