@@ -3,8 +3,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { auth } from '../config/firebase.js';
 import { onAuthStateChanged } from '@firebase/auth';
 import { authApi } from '../api/authApi.js';
+import { userApi } from '../api/userApi.js';
 import client from '../api/client.js';
 import { notificationService } from '../services/notificationService.js';
+import { resetHomeInitSession } from '../utils/homeInitSession.js';
+import { logAuthFlow, logAuthError } from '../utils/flowLog.js';
 
 const AuthContext = createContext();
 
@@ -16,6 +19,7 @@ export const AuthProvider = ({ children }) => {
   const authOperationInProgress = useRef(false);
 
   const ensureFirebaseSession = async (expectedUid) => {
+    logAuthFlow('Waiting for Firebase session');
     await auth.authStateReady();
 
     const currentUser = auth.currentUser;
@@ -28,8 +32,25 @@ export const AuthProvider = ({ children }) => {
       throw new Error('Firebase authentication mismatch');
     }
 
+    await currentUser.getIdToken(true);
+    logAuthFlow('Firebase ID token obtained');
     setFirebaseUser(currentUser);
     return currentUser;
+  };
+
+  const syncBackendUserFromProfile = async () => {
+    logAuthFlow('Backend user synchronisation started');
+    const response = await userApi.getProfile();
+
+    if (!response?.success || !response?.data?._id) {
+      throw new Error('Backend user synchronisation failed');
+    }
+
+    logAuthFlow('Backend user synchronisation successful');
+    logAuthFlow('MongoDB user confirmed');
+    setUser(response.data);
+    await AsyncStorage.setItem('user', JSON.stringify(response.data));
+    return response.data;
   };
 
   useEffect(() => {
@@ -38,18 +59,37 @@ export const AuthProvider = ({ children }) => {
         setFirebaseUser(nextFirebaseUser);
 
         if (nextFirebaseUser) {
+          if (authOperationInProgress.current) {
+            logAuthFlow('Auth state changed during active register/login — deferring user sync');
+            return;
+          }
+
           const cachedUser = await AsyncStorage.getItem('user');
           if (cachedUser) {
-            setUser(JSON.parse(cachedUser));
-          } else {
-            setUser({ uid: nextFirebaseUser.uid, email: nextFirebaseUser.email });
+            const parsedUser = JSON.parse(cachedUser);
+            if (parsedUser?._id) {
+              setUser(parsedUser);
+              logAuthFlow('Restored cached MongoDB user');
+              return;
+            }
+          }
+
+          try {
+            await auth.authStateReady();
+            if (auth.currentUser) {
+              await syncBackendUserFromProfile();
+            }
+          } catch (profileError) {
+            logAuthError('Failed to restore backend user on auth state change', profileError);
+            setUser(null);
           }
         } else if (!authOperationInProgress.current) {
           setUser(null);
           await AsyncStorage.removeItem('user');
+          resetHomeInitSession();
         }
       } catch (error) {
-        console.error('Error in auth state listener:', error);
+        logAuthError('Auth state listener failed', error);
         if (!authOperationInProgress.current) {
           setFirebaseUser(null);
           setUser(null);
@@ -58,6 +98,7 @@ export const AuthProvider = ({ children }) => {
         setIsAuthReady(true);
         if (!authOperationInProgress.current) {
           setIsLoading(false);
+          logAuthFlow('Authentication initialisation complete');
         }
       }
     });
@@ -70,17 +111,22 @@ export const AuthProvider = ({ children }) => {
 
     try {
       setIsLoading(true);
+      logAuthFlow('Firebase registration started');
 
       const { idToken, user: firebaseAuthUser } = await authApi.firebaseRegister(
         email,
         password
       );
+      logAuthFlow('Firebase authentication successful');
       await ensureFirebaseSession(firebaseAuthUser.uid);
 
+      logAuthFlow('Backend user synchronisation started');
       const response = await authApi.registerUser(idToken, name);
-      if (!response.success || !response.data) {
+      if (!response.success || !response.data?._id) {
         throw new Error('Backend registration failed');
       }
+      logAuthFlow('Backend user synchronisation successful');
+      logAuthFlow('MongoDB user confirmed');
 
       let userData = response.data;
 
@@ -93,14 +139,15 @@ export const AuthProvider = ({ children }) => {
           userData = updateResponse.data.data;
         }
       } catch (updateError) {
-        console.warn('Failed to update profile with phone/bloodGroup:', updateError);
+        logAuthError('Failed to update profile with phone/bloodGroup', updateError);
       }
 
       setUser(userData);
       await AsyncStorage.setItem('user', JSON.stringify(userData));
+      logAuthFlow('Authentication initialisation complete');
       return userData;
     } catch (error) {
-      console.error('Registration error:', error);
+      logAuthError('Registration failed', error);
       throw error;
     } finally {
       authOperationInProgress.current = false;
@@ -113,22 +160,28 @@ export const AuthProvider = ({ children }) => {
 
     try {
       setIsLoading(true);
+      logAuthFlow('Firebase login started');
 
       const { idToken, user: firebaseAuthUser } = await authApi.firebaseLogin(email, password);
+      logAuthFlow('Firebase authentication successful');
       await ensureFirebaseSession(firebaseAuthUser.uid);
 
+      logAuthFlow('Backend user synchronisation started');
       const response = await authApi.loginUser(idToken);
-      if (!response.success || !response.data) {
+      if (!response.success || !response.data?._id) {
         throw new Error('Backend login failed');
       }
+      logAuthFlow('Backend user synchronisation successful');
+      logAuthFlow('MongoDB user confirmed');
 
       const userData = response.data;
       setUser(userData);
       await AsyncStorage.setItem('user', JSON.stringify(userData));
+      logAuthFlow('Authentication initialisation complete');
 
       return userData;
     } catch (error) {
-      console.error('Login error:', error);
+      logAuthError('Login failed', error);
       throw error;
     } finally {
       authOperationInProgress.current = false;
@@ -146,14 +199,18 @@ export const AuthProvider = ({ children }) => {
       setFirebaseUser(null);
       setUser(null);
       await AsyncStorage.removeItem('user');
+      resetHomeInitSession();
+      logAuthFlow('Logout complete — home init session reset');
     } catch (error) {
-      console.error('Logout error:', error);
+      logAuthError('Logout failed', error);
       throw error;
     } finally {
       authOperationInProgress.current = false;
       setIsLoading(false);
     }
   };
+
+  const isBackendUserReady = Boolean(user?._id);
 
   const isFirebaseAuthenticated =
     isAuthReady &&
@@ -167,6 +224,7 @@ export const AuthProvider = ({ children }) => {
     isLoading,
     isAuthReady,
     isFirebaseAuthenticated,
+    isBackendUserReady,
     register,
     login,
     logout,

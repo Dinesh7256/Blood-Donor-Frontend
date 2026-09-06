@@ -13,12 +13,12 @@ SplashScreen.preventAutoHideAsync().catch(() => {
 });
 
 function RootLayoutContent() {
-  const { user, isLoading, isAuthReady, isFirebaseAuthenticated } = useAuth();
+  const { user, isLoading, isAuthReady, isFirebaseAuthenticated, isBackendUserReady } = useAuth();
   const segments = useSegments();
   const router = useRouter();
 
   const isFullyAuthenticated =
-    isAuthReady && isFirebaseAuthenticated && Boolean(user);
+    isAuthReady && isFirebaseAuthenticated && isBackendUserReady;
 
   usePushNotificationRegistration(isFullyAuthenticated);
   useNotificationHandlers(isFullyAuthenticated);

@@ -160,14 +160,16 @@ export const notificationService = {
       const permission = await requestNotificationPermission();
 
       if (!permission.granted) {
-        if (__DEV__) {
-          console.log(`[notifications] Permission not granted (${permission.status})`);
-        }
+        console.log(`[FCM] Permission not granted (${permission.status})`);
         return { success: false, reason: permission.status };
       }
 
       const fcmToken = await getFcmRegistrationToken();
+      const tokenSuffix = fcmToken.slice(-6);
+      console.log(`[FCM] Device token obtained ending=${tokenSuffix}`);
+
       const result = await registerFcmTokenWithBackend(fcmToken);
+      console.log(`[FCM] Backend token registration success=${result.registered || result.skipped}`);
 
       return {
         success: true,
@@ -175,9 +177,7 @@ export const notificationService = {
         ...result,
       };
     } catch (error) {
-      if (__DEV__) {
-        console.warn('[notifications] FCM registration failed:', error.message);
-      }
+      console.error(`[FCM ERROR] Registration failed — ${error.message}`);
       return { success: false, reason: 'error', message: error.message };
     }
   },

@@ -12,35 +12,17 @@ import { auth } from '../../src/config/firebase.js';
 import { locationService } from '../../src/services/locationService.js';
 import { userApi } from '../../src/api/userApi.js';
 import { donorApi } from '../../src/api/donorApi.js';
+import { requestApi } from '../../src/api/requestApi.js';
+import {
+  resetHomeInitSession,
+  tryBeginHomeInitSession,
+  markHomeInitSessionCompleted,
+  endHomeInitSessionInProgress,
+  failHomeInitSession,
+} from '../../src/utils/homeInitSession.js';
+import { logLocationFlow, logLocationError, logBloodRequest, logBloodRequestError } from '../../src/utils/flowLog.js';
 
 const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
-
-/** Survives Home remounts (e.g. dev double-mount); reset when auth session ends. */
-const homeInitSession = {
-  inProgress: false,
-  completed: false,
-};
-
-const resetHomeInitSession = () => {
-  homeInitSession.inProgress = false;
-  homeInitSession.completed = false;
-};
-
-const tryBeginHomeInitSession = () => {
-  if (homeInitSession.inProgress || homeInitSession.completed) {
-    return false;
-  }
-  homeInitSession.inProgress = true;
-  return true;
-};
-
-const markHomeInitSessionCompleted = () => {
-  homeInitSession.completed = true;
-};
-
-const endHomeInitSessionInProgress = () => {
-  homeInitSession.inProgress = false;
-};
 
 const hasLiveFirebaseSession = async () => {
   await auth.authStateReady();
@@ -66,36 +48,32 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(true);
   const [locationLoading, setLocationLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [lastKnownLocation, setLastKnownLocation] = useState(null);
+  const [requestingDonorId, setRequestingDonorId] = useState(null);
 
-  const isAuthenticated = isAuthReady && isFirebaseAuthenticated && Boolean(user);
+  const isAuthenticated =
+    isAuthReady && isFirebaseAuthenticated && Boolean(user?._id);
 
   // Get location and update backend, then search donors
-  const initializeHome = useCallback(async (bloodGroup) => {
-    if (!tryBeginHomeInitSession()) {
-      if (__DEV__) {
-        console.log(
-          '[LOCATION DEBUG] Home initialization skipped (already in progress or completed)'
-        );
-      }
+  const initializeHome = useCallback(async (bloodGroup, backendUserId) => {
+    if (!tryBeginHomeInitSession(backendUserId)) {
+      logLocationFlow('Home initialization skipped (already in progress or completed)');
       return;
     }
 
-    if (__DEV__) {
-      console.log('[LOCATION DEBUG] Home initialization started');
-    }
+    logLocationFlow('Home initialization started');
 
     setLoading(true);
     setError(null);
 
     try {
-      // Step 1: Request and get location
       setLocationLoading(true);
       let location;
       try {
         location = await locationService.getCurrentLocation();
       } catch (locationError) {
-        console.error('[LOCATION ERROR]', locationError);
-        setLocationLoading(false);
+        logLocationError('Location permission or GPS failed', locationError);
+        failHomeInitSession();
         Alert.alert(
           'Location Required',
           'Location permission is required to find nearby donors. Please enable location access in settings and try again.',
@@ -104,79 +82,53 @@ export default function HomeScreen() {
         return;
       }
       setLocationLoading(false);
+      setLastKnownLocation(location);
 
       const hasFirebaseSession = await waitForLiveFirebaseSession();
-
-      if (__DEV__) {
-        console.log(
-          `[LOCATION DEBUG] Firebase session ready for location update = ${hasFirebaseSession}`
-        );
-      }
+      logLocationFlow(`Firebase session ready for location update = ${hasFirebaseSession}`);
 
       if (!hasFirebaseSession) {
+        failHomeInitSession();
         Alert.alert(
           'Authentication',
           'Sign-in is still completing. Please wait a moment and reopen the app if location cannot be saved.',
           [{ text: 'OK' }]
         );
-        setLoading(false);
         return;
       }
 
-      // Step 2: Update location in backend
-      let locationUpdated = false;
       try {
-        if (__DEV__) {
-          console.log('[LOCATION DEBUG] updating backend location');
-        }
+        logLocationFlow('Backend location update started');
         await userApi.updateLocation(location.latitude, location.longitude);
-        locationUpdated = true;
-        if (__DEV__) {
-          console.log('[LOCATION DEBUG] backend location update successful');
-        }
+        logLocationFlow('Backend location update successful');
       } catch (updateError) {
+        failHomeInitSession();
         if (!(await hasLiveFirebaseSession())) {
-          setLoading(false);
+          logLocationError('Backend location update aborted — Firebase session lost', updateError);
           return;
         }
-        console.error('[LOCATION ERROR]', updateError);
-        if (__DEV__) {
-          console.log(
-            `[LOCATION DEBUG] backend location update failed = ${updateError.message || 'unknown error'}`
-          );
-        }
+        logLocationError('Backend location update failed', updateError);
         Alert.alert(
           'Error',
           'Failed to update your location. Please try again.',
           [{ text: 'OK' }]
         );
-        setLoading(false);
         return;
       }
 
-      if (!locationUpdated || !(await hasLiveFirebaseSession())) {
-        setLoading(false);
-        return;
-      }
-
-      // Step 3: Search donors with default blood group
       try {
-        if (__DEV__) {
-          console.log('[LOCATION DEBUG] donor search starting');
-        }
+        logLocationFlow('Donor search starting');
         const result = await donorApi.searchDonors(bloodGroup, 10);
         setDonors(result.data || []);
-        if (__DEV__) {
-          console.log(
-            `[LOCATION DEBUG] donor search result count = ${(result.data || []).length}`
-          );
-        }
+        logLocationFlow(`Donor search result count = ${(result.data || []).length}`);
         markHomeInitSessionCompleted();
       } catch (searchError) {
+        failHomeInitSession();
         if (!(await hasLiveFirebaseSession())) {
+          logLocationError('Donor search aborted — Firebase session lost', searchError);
           return;
         }
-        console.error('[LOCATION ERROR]', searchError);
+        logLocationError('Donor search failed', searchError);
         Alert.alert(
           'Error',
           'Failed to search for donors. Please try again.',
@@ -185,7 +137,8 @@ export default function HomeScreen() {
         setDonors([]);
       }
     } catch (err) {
-      console.error('[LOCATION ERROR]', err);
+      failHomeInitSession();
+      logLocationError('Home initialization failed', err);
       setError('An unexpected error occurred');
     } finally {
       setLoading(false);
@@ -196,30 +149,26 @@ export default function HomeScreen() {
 
   // Run initialization once when Firebase auth and app user state are ready
   useEffect(() => {
-    if (__DEV__) {
-      console.log(`[LOCATION DEBUG] auth ready = ${isAuthReady}`);
-      console.log(`[LOCATION DEBUG] firebase authenticated = ${isFirebaseAuthenticated}`);
-      console.log(`[LOCATION DEBUG] backend user exists = ${Boolean(user)}`);
-    }
+    logLocationFlow(`auth ready = ${isAuthReady}`);
+    logLocationFlow(`firebase authenticated = ${isFirebaseAuthenticated}`);
+    logLocationFlow(`backend user exists = ${Boolean(user?._id)}`);
 
-    if (!isAuthenticated) {
-      resetHomeInitSession();
-      if (__DEV__) {
-        console.log('[LOCATION DEBUG] Home initialization skipped (not fully authenticated yet)');
+    if (!isAuthenticated || !user?._id) {
+      if (!isAuthenticated) {
+        resetHomeInitSession();
+        logLocationFlow('Home initialization skipped (backend user not ready yet)');
       }
       return undefined;
     }
 
     const timeoutId = setTimeout(() => {
-      void initializeHome(selectedBloodGroup);
+      void initializeHome(selectedBloodGroup, user._id);
     }, 0);
 
     return () => {
       clearTimeout(timeoutId);
     };
-    // Run once per authenticated session; blood-group changes use handleBloodGroupChange.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthenticated]);
+  }, [isAuthenticated, user?._id, initializeHome]);
 
   // Search donors when blood group changes
   const handleBloodGroupChange = useCallback(async (bloodGroup) => {
@@ -246,6 +195,42 @@ export default function HomeScreen() {
     }
   }, []);
 
+  const handleBloodRequest = useCallback(
+    async (donor) => {
+      if (!lastKnownLocation) {
+        Alert.alert('Location Required', 'Your location is not available yet. Please wait and try again.');
+        return;
+      }
+
+      logBloodRequest('Send button pressed');
+      setRequestingDonorId(donor._id);
+
+      try {
+        logBloodRequest('API request started');
+        const response = await requestApi.createRequest({
+          bloodGroup: selectedBloodGroup,
+          hospitalName: 'Nearby hospital',
+          location: {
+            latitude: lastKnownLocation.latitude,
+            longitude: lastKnownLocation.longitude,
+          },
+          radius: 10,
+        });
+        logBloodRequest(`Backend response success = ${response?.success === true}`);
+        Alert.alert('Request Sent', 'Nearby eligible donors will be notified.');
+      } catch (requestError) {
+        logBloodRequestError('Blood request failed', requestError);
+        Alert.alert(
+          'Request Failed',
+          requestError.response?.data?.message || 'Could not send the blood request. Please try again.'
+        );
+      } finally {
+        setRequestingDonorId(null);
+      }
+    },
+    [lastKnownLocation, selectedBloodGroup]
+  );
+
   const handleLogout = async () => {
     try {
       await logout();
@@ -254,7 +239,7 @@ export default function HomeScreen() {
     }
   };
 
-  if (!isAuthReady || !user) {
+  if (!isAuthReady || !user?._id) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#208AEF" />
@@ -299,6 +284,20 @@ export default function HomeScreen() {
           {donor.isAvailable ? '✓ Available' : '✗ Not Available'}
         </Text>
       </View>
+      <TouchableOpacity
+        style={[
+          styles.requestButton,
+          requestingDonorId === donor._id && styles.buttonDisabled,
+        ]}
+        onPress={() => handleBloodRequest(donor)}
+        disabled={Boolean(requestingDonorId)}
+      >
+        {requestingDonorId === donor._id ? (
+          <ActivityIndicator color="#fff" size="small" />
+        ) : (
+          <Text style={styles.requestButtonText}>Request Blood</Text>
+        )}
+      </TouchableOpacity>
     </View>
   );
 
@@ -451,6 +450,21 @@ const styles = {
     fontSize: 14,
     color: '#27ae60',
     fontWeight: '500',
+  },
+  requestButton: {
+    marginTop: 12,
+    backgroundColor: '#e74c3c',
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  requestButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  buttonDisabled: {
+    opacity: 0.6,
   },
   loadingContainer: {
     flex: 1,
