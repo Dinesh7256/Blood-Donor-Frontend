@@ -10,7 +10,13 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://blood-donor-finder-looj.onrender.com/api"
+        "EXPO_PUBLIC_API_BASE_URL": "https://blood-donor-finder-looj.onrender.com/api",
+        "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyBxoK_qstUnMeJhIulLXJCDUItTVLJLeVk",
+        "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "blood-finder-b3f71.firebaseapp.com",
+        "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "blood-finder-b3f71",
+        "EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET": "blood-finder-b3f71.firebasestorage.app",
+        "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "970374855783",
+        "EXPO_PUBLIC_FIREBASE_APP_ID": "1:970374855783:web:eb50f5e4ab4883a277e8c2"
       }
     }
   }

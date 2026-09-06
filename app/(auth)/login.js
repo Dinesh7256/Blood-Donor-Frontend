@@ -3,147 +3,154 @@ import {
   View,
   Text,
   TextInput,
-  TouchableOpacity,
-  ActivityIndicator,
   Alert,
   ScrollView,
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../src/context/AuthContext.js';
+import { getFirebaseAuthErrorMessage } from '../../src/utils/authErrors.js';
+import { logAuthDebug } from '../../src/utils/flowLog.js';
+import { validateEmail, validatePassword } from '../../src/utils/validation.js';
+import { validateLoginForm, getFirstValidationError } from '../../src/utils/formValidation.js';
+import { assertNetworkAvailable } from '../../src/utils/networkGuard.js';
+import LoadingButton from '../../src/components/LoadingButton.js';
+import FormFieldError from '../../src/components/FormFieldError.js';
+
+const validators = { validateEmail, validatePassword };
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState({});
   const router = useRouter();
   const { login } = useAuth();
 
   const handleLogin = async () => {
-    // Validation
-    if (!email.trim()) {
-      Alert.alert('Error', 'Please enter your email');
+    const errors = validateLoginForm({ email, password, validators });
+    setFieldErrors(errors);
+
+    if (Object.keys(errors).length) {
+      Alert.alert('Please correct the highlighted information.', getFirstValidationError(errors));
       return;
     }
 
-    if (!password.trim()) {
-      Alert.alert('Error', 'Please enter your password');
-      return;
-    }
-
-    if (!email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
-      Alert.alert('Error', 'Please enter a valid email address');
+    if (loading) {
       return;
     }
 
     setLoading(true);
 
     try {
-      await login(email, password);
-      // Router will automatically redirect to /(app)/ after successful login
+      logAuthDebug('Login button pressed');
+      await assertNetworkAvailable();
+      const emailResult = validateEmail(email);
+      const passwordResult = validatePassword(password);
+      await login(emailResult.value, passwordResult.value);
+      logAuthDebug('Login completed successfully');
     } catch (error) {
-      let errorMessage = 'Login failed. Please try again.';
-
-      if (error.code === 'auth/user-not-found') {
-        errorMessage = 'No account found with this email. Please register first.';
-      } else if (error.code === 'auth/wrong-password') {
-        errorMessage = 'Incorrect password. Please try again.';
-      } else if (error.code === 'auth/invalid-email') {
-        errorMessage = 'Invalid email address.';
-      } else if (error.code === 'auth/user-disabled') {
-        errorMessage = 'This account has been disabled.';
-      } else if (error.message?.includes('User not found')) {
-        errorMessage = 'No account found with this email. Please register first.';
-      } else if (error.response?.status === 404) {
-        errorMessage = 'No account found with this email. Please register first.';
-      }
-
-      Alert.alert('Login Error', errorMessage);
+      logAuthDebug(`Login failed: ${error?.message || error}`);
+      Alert.alert(
+        'Login Error',
+        getFirebaseAuthErrorMessage(error, 'Login failed. Please try again.')
+      );
     } finally {
       setLoading(false);
     }
   };
 
-  const handleRegisterLink = () => {
-    router.push('/(auth)/register');
-  };
-
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      style={{ flex: 1 }}
-    >
-      <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
-        <View style={styles.container}>
-          <View style={styles.header}>
-            <Text style={styles.title}>Blood Donor Finder</Text>
-            <Text style={styles.subtitle}>Login to your account</Text>
-          </View>
-
-          <View style={styles.form}>
-            <View style={styles.fieldContainer}>
-              <Text style={styles.label}>Email</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Enter your email"
-                placeholderTextColor="#999"
-                value={email}
-                onChangeText={setEmail}
-                editable={!loading}
-                keyboardType="email-address"
-                autoCapitalize="none"
-              />
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.flex}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.container}>
+            <View style={styles.header}>
+              <Text style={styles.title}>Blood Donor Finder</Text>
+              <Text style={styles.subtitle}>Login to your account</Text>
             </View>
 
-            <View style={styles.fieldContainer}>
-              <Text style={styles.label}>Password</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Enter your password"
-                placeholderTextColor="#999"
-                value={password}
-                onChangeText={setPassword}
-                editable={!loading}
-                secureTextEntry
-              />
+            <View style={styles.form}>
+              <View style={styles.fieldContainer}>
+                <Text style={styles.label}>Email</Text>
+                <TextInput
+                  style={[styles.input, fieldErrors.email && styles.inputError]}
+                  placeholder="Enter your email"
+                  placeholderTextColor="#999"
+                  value={email}
+                  onChangeText={(value) => {
+                    setEmail(value);
+                    if (fieldErrors.email) {
+                      setFieldErrors((prev) => ({ ...prev, email: undefined }));
+                    }
+                  }}
+                  editable={!loading}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
+                <FormFieldError message={fieldErrors.email} />
+              </View>
+
+              <View style={styles.fieldContainer}>
+                <Text style={styles.label}>Password</Text>
+                <TextInput
+                  style={[styles.input, fieldErrors.password && styles.inputError]}
+                  placeholder="Enter your password"
+                  placeholderTextColor="#999"
+                  value={password}
+                  onChangeText={(value) => {
+                    setPassword(value);
+                    if (fieldErrors.password) {
+                      setFieldErrors((prev) => ({ ...prev, password: undefined }));
+                    }
+                  }}
+                  editable={!loading}
+                  secureTextEntry
+                />
+                <FormFieldError message={fieldErrors.password} />
+              </View>
+
+              <LoadingButton loading={loading} loadingText="Logging in..." onPress={handleLogin}>
+                Login
+              </LoadingButton>
             </View>
 
-            <TouchableOpacity
-              style={[styles.loginButton, loading && styles.buttonDisabled]}
-              onPress={handleLogin}
-              disabled={loading}
-            >
-              {loading ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.loginButtonText}>Login</Text>
-              )}
-            </TouchableOpacity>
+            <View style={styles.footer}>
+              <Text style={styles.footerText}>Don&apos;t have an account? </Text>
+              <Text
+                style={styles.registerLink}
+                onPress={() => !loading && router.push('/(auth)/register')}
+              >
+                Register here
+              </Text>
+            </View>
           </View>
-
-          <View style={styles.footer}>
-            <Text style={styles.footerText}>Don&apos;t have an account? </Text>
-            <TouchableOpacity onPress={handleRegisterLink} disabled={loading}>
-              <Text style={styles.registerLink}>Register here</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const styles = {
+  flex: { flex: 1 },
+  safeArea: { flex: 1, backgroundColor: '#f5f5f5' },
+  scrollContent: { flexGrow: 1 },
   container: {
-    flex: 1,
+    flexGrow: 1,
     padding: 20,
     justifyContent: 'space-between',
-    backgroundColor: '#f5f5f5',
   },
   header: {
-    marginTop: 40,
-    marginBottom: 40,
+    marginTop: 24,
+    marginBottom: 32,
   },
   title: {
     fontSize: 28,
@@ -176,26 +183,15 @@ const styles = {
     backgroundColor: '#fff',
     color: '#333',
   },
-  loginButton: {
-    backgroundColor: '#e74c3c',
-    paddingVertical: 14,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 10,
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  loginButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
+  inputError: {
+    borderColor: '#e74c3c',
   },
   footer: {
     flexDirection: 'row',
     justifyContent: 'center',
-    marginBottom: 40,
+    marginTop: 32,
+    marginBottom: 24,
+    flexWrap: 'wrap',
   },
   footerText: {
     color: '#666',

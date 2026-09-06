@@ -1,8 +1,22 @@
-const PRODUCTION_API_BASE_URL = 'https://blood-donor-finder-looj.onrender.com/api';
+const DEFAULT_API_BASE_URL = 'https://blood-donor-finder-looj.onrender.com/api';
 
-export const API_BASE_URL = __DEV__
-  ? process.env.EXPO_PUBLIC_API_BASE_URL || 'http://10.0.2.2:3000/api'
-  : PRODUCTION_API_BASE_URL;
+const normalizeApiBaseUrl = (value) => {
+  const trimmed = String(value || DEFAULT_API_BASE_URL).trim().replace(/\/+$/, '');
+
+  if (trimmed.endsWith('/api/api')) {
+    return trimmed.slice(0, -4);
+  }
+
+  return trimmed;
+};
+
+export const API_BASE_URL = normalizeApiBaseUrl(
+  process.env.EXPO_PUBLIC_API_BASE_URL || DEFAULT_API_BASE_URL
+);
+
+if (__DEV__) {
+  console.log(`[API CONFIG] API_BASE_URL = ${API_BASE_URL}`);
+}
 
 export const FIREBASE_CONFIG = {
   apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY || '',

@@ -1,6 +1,16 @@
 import { useEffect, useRef } from 'react';
 import { Alert } from 'react-native';
+import { router } from 'expo-router';
 import { notificationService } from '../services/notificationService.js';
+
+const navigateForNotification = (result) => {
+  if (!result?.navigationAvailable || !result?.navigationPath) {
+    return false;
+  }
+
+  router.push(result.navigationPath);
+  return true;
+};
 
 const showBloodRequestTapFallback = (result) => {
   if (!result.handled) {
@@ -10,9 +20,19 @@ const showBloodRequestTapFallback = (result) => {
   const bloodGroupText = result.bloodGroup ? ` for ${result.bloodGroup}` : '';
 
   Alert.alert(
-    'Blood Donation Request',
-    `A nearby blood request${bloodGroupText} was received. Request details screen is not available yet.`,
-    [{ text: 'OK' }]
+    result.type === 'blood_request_accepted' ? 'Donor Accepted' : 'Blood Donation Request',
+    result.type === 'blood_request_accepted'
+      ? 'A donor has accepted your blood request.'
+      : `A nearby blood request${bloodGroupText} was received.`,
+    [
+      {
+        text: 'View',
+        onPress: () => {
+          navigateForNotification(result);
+        },
+      },
+      { text: 'OK' },
+    ]
   );
 };
 
@@ -23,7 +43,7 @@ const handleRemoteMessage = (remoteMessage) => {
     return result;
   }
 
-  if (result.navigationAvailable) {
+  if (navigateForNotification(result)) {
     return result;
   }
 
@@ -48,7 +68,7 @@ export const useNotificationHandlers = (isFullyAuthenticated) => {
     }
 
     const foregroundSubscription = messaging.onMessage(async (remoteMessage) => {
-      notificationService.handleBloodRequestNotification(remoteMessage);
+      const result = notificationService.handleBloodRequestNotification(remoteMessage);
 
       if (__DEV__) {
         console.log(
@@ -60,7 +80,16 @@ export const useNotificationHandlers = (isFullyAuthenticated) => {
       if (remoteMessage?.notification?.title) {
         Alert.alert(
           remoteMessage.notification.title,
-          remoteMessage.notification.body || 'You have a new notification.'
+          remoteMessage.notification.body || 'You have a new notification.',
+          result.handled
+            ? [
+                {
+                  text: 'View',
+                  onPress: () => navigateForNotification(result),
+                },
+                { text: 'OK' },
+              ]
+            : [{ text: 'OK' }]
         );
       }
     });

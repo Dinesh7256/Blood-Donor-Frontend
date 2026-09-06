@@ -1,12 +1,14 @@
 import { create } from 'axios';
 import { API_BASE_URL } from '../constants/config.js';
 import { auth } from '../config/firebase.js';
+import { logApiFlow } from '../utils/flowLog.js';
+import { notifyUnauthorized } from '../utils/authSession.js';
 
 const PUBLIC_API_PATHS = ['/auth/login', '/auth/register'];
 
 const client = create({
   baseURL: API_BASE_URL,
-  timeout: 10000,
+  timeout: 20000,
 });
 
 const isPublicRequest = (url = '') =>
@@ -38,6 +40,7 @@ client.interceptors.request.use(
 
       const idToken = await auth.currentUser.getIdToken();
       setAuthorizationHeader(config, idToken);
+      logApiFlow(`${config.method?.toUpperCase() || 'GET'} ${config.url}`);
     } catch (error) {
       console.error('Error retrieving Firebase ID token:', error);
       return Promise.reject(error);
@@ -54,9 +57,14 @@ client.interceptors.request.use(
 client.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401 || error.response?.status === 403) {
+    const status = error.response?.status;
+
+    if (status === 401 && !isPublicRequest(error.config?.url || '')) {
+      notifyUnauthorized();
+    } else if (status === 401 || status === 403) {
       console.warn('Unauthorized access:', error.response?.data?.message || error.message);
     }
+
     return Promise.reject(error);
   }
 );

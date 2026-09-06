@@ -3,17 +3,40 @@ import {
   View,
   Text,
   TextInput,
-  TouchableOpacity,
-  ActivityIndicator,
   Alert,
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  TouchableOpacity,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../src/context/AuthContext.js';
+import { getFirebaseAuthErrorMessage } from '../../src/utils/authErrors.js';
+import { logAuthDebug } from '../../src/utils/flowLog.js';
+import { BLOOD_GROUPS } from '../../src/constants/bloodGroups.js';
+import {
+  validateName,
+  validateEmail,
+  validatePassword,
+  validatePhone,
+  validateBloodGroup,
+} from '../../src/utils/validation.js';
+import {
+  validateRegistrationForm,
+  getFirstValidationError,
+} from '../../src/utils/formValidation.js';
+import { assertNetworkAvailable } from '../../src/utils/networkGuard.js';
+import LoadingButton from '../../src/components/LoadingButton.js';
+import FormFieldError from '../../src/components/FormFieldError.js';
 
-const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
+const validators = {
+  validateName,
+  validateEmail,
+  validatePassword,
+  validatePhone,
+  validateBloodGroup,
+};
 
 export default function RegisterScreen() {
   const [name, setName] = useState('');
@@ -23,218 +46,224 @@ export default function RegisterScreen() {
   const [bloodGroup, setBloodGroup] = useState('');
   const [showBloodGroupPicker, setShowBloodGroupPicker] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState({});
   const router = useRouter();
   const { register } = useAuth();
 
+  const clearFieldError = (field) => {
+    if (fieldErrors[field]) {
+      setFieldErrors((prev) => ({ ...prev, [field]: undefined }));
+    }
+  };
+
   const handleRegister = async () => {
-    // Validation
-    if (!name.trim()) {
-      Alert.alert('Error', 'Please enter your name');
+    const errors = validateRegistrationForm({
+      name,
+      email,
+      password,
+      phone,
+      bloodGroup,
+      validators,
+    });
+    setFieldErrors(errors);
+
+    if (Object.keys(errors).length) {
+      Alert.alert('Please correct the highlighted information.', getFirstValidationError(errors));
       return;
     }
 
-    if (!email.trim()) {
-      Alert.alert('Error', 'Please enter your email');
-      return;
-    }
-
-    if (!email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
-      Alert.alert('Error', 'Please enter a valid email address');
-      return;
-    }
-
-    if (!password.trim()) {
-      Alert.alert('Error', 'Please enter a password');
-      return;
-    }
-
-    if (password.length < 6) {
-      Alert.alert('Error', 'Password must be at least 6 characters');
-      return;
-    }
-
-    if (!phone.trim()) {
-      Alert.alert('Error', 'Please enter your phone number');
-      return;
-    }
-
-    if (!bloodGroup) {
-      Alert.alert('Error', 'Please select your blood group');
+    if (loading) {
       return;
     }
 
     setLoading(true);
 
     try {
-      await register(email, password, name, phone, bloodGroup);
-      // Router will automatically redirect to /(app)/ after successful registration
+      logAuthDebug('Register button pressed');
+      await assertNetworkAvailable();
+      await register(
+        validateEmail(email).value,
+        validatePassword(password).value,
+        validateName(name).value,
+        validatePhone(phone, { required: true }).value,
+        validateBloodGroup(bloodGroup).value
+      );
+      logAuthDebug('Register completed successfully');
     } catch (error) {
-      let errorMessage = 'Registration failed. Please try again.';
-
-      if (error.code === 'auth/email-already-in-use') {
-        errorMessage = 'This email is already registered. Please login instead.';
-      } else if (error.code === 'auth/weak-password') {
-        errorMessage = 'Password is too weak. Please use a stronger password.';
-      } else if (error.code === 'auth/invalid-email') {
-        errorMessage = 'Invalid email address.';
-      } else if (error.message?.includes('already exists')) {
-        errorMessage = 'This email is already registered. Please login instead.';
-      } else if (error.response?.status === 400) {
-        errorMessage = error.response?.data?.message || 'Registration failed';
-      }
-
-      Alert.alert('Registration Error', errorMessage);
+      logAuthDebug(`Register failed: ${error?.message || error}`);
+      Alert.alert(
+        'Registration Error',
+        getFirebaseAuthErrorMessage(error, 'Registration failed. Please try again.')
+      );
     } finally {
       setLoading(false);
     }
   };
 
-  const handleLoginLink = () => {
-    router.push('/(auth)/login');
-  };
-
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      style={{ flex: 1 }}
-    >
-      <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
-        <View style={styles.container}>
-          <View style={styles.header}>
-            <Text style={styles.title}>Create Account</Text>
-            <Text style={styles.subtitle}>Join us to help save lives</Text>
-          </View>
-
-          <View style={styles.form}>
-            <View style={styles.fieldContainer}>
-              <Text style={styles.label}>Full Name</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Enter your full name"
-                placeholderTextColor="#999"
-                value={name}
-                onChangeText={setName}
-                editable={!loading}
-              />
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.flex}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.container}>
+            <View style={styles.header}>
+              <Text style={styles.title}>Create Account</Text>
+              <Text style={styles.subtitle}>Join us to help save lives</Text>
             </View>
 
-            <View style={styles.fieldContainer}>
-              <Text style={styles.label}>Email</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Enter your email"
-                placeholderTextColor="#999"
-                value={email}
-                onChangeText={setEmail}
-                editable={!loading}
-                keyboardType="email-address"
-                autoCapitalize="none"
-              />
-            </View>
+            <View style={styles.form}>
+              <View style={styles.fieldContainer}>
+                <Text style={styles.label}>Full Name</Text>
+                <TextInput
+                  style={[styles.input, fieldErrors.name && styles.inputError]}
+                  placeholder="Enter your full name"
+                  placeholderTextColor="#999"
+                  value={name}
+                  onChangeText={(value) => {
+                    setName(value);
+                    clearFieldError('name');
+                  }}
+                  editable={!loading}
+                />
+                <FormFieldError message={fieldErrors.name} />
+              </View>
 
-            <View style={styles.fieldContainer}>
-              <Text style={styles.label}>Password</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Enter a password (min 6 characters)"
-                placeholderTextColor="#999"
-                value={password}
-                onChangeText={setPassword}
-                editable={!loading}
-                secureTextEntry
-              />
-            </View>
+              <View style={styles.fieldContainer}>
+                <Text style={styles.label}>Email</Text>
+                <TextInput
+                  style={[styles.input, fieldErrors.email && styles.inputError]}
+                  placeholder="Enter your email"
+                  placeholderTextColor="#999"
+                  value={email}
+                  onChangeText={(value) => {
+                    setEmail(value);
+                    clearFieldError('email');
+                  }}
+                  editable={!loading}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
+                <FormFieldError message={fieldErrors.email} />
+              </View>
 
-            <View style={styles.fieldContainer}>
-              <Text style={styles.label}>Phone Number</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Enter your phone number"
-                placeholderTextColor="#999"
-                value={phone}
-                onChangeText={setPhone}
-                editable={!loading}
-                keyboardType="phone-pad"
-              />
-            </View>
+              <View style={styles.fieldContainer}>
+                <Text style={styles.label}>Password</Text>
+                <TextInput
+                  style={[styles.input, fieldErrors.password && styles.inputError]}
+                  placeholder="Enter a password (min 6 characters)"
+                  placeholderTextColor="#999"
+                  value={password}
+                  onChangeText={(value) => {
+                    setPassword(value);
+                    clearFieldError('password');
+                  }}
+                  editable={!loading}
+                  secureTextEntry
+                />
+                <FormFieldError message={fieldErrors.password} />
+              </View>
 
-            <View style={styles.fieldContainer}>
-              <Text style={styles.label}>Blood Group</Text>
-              <TouchableOpacity
-                style={styles.bloodGroupButton}
-                onPress={() => setShowBloodGroupPicker(!showBloodGroupPicker)}
-                disabled={loading}
-              >
-                <Text
-                  style={[
-                    styles.bloodGroupButtonText,
-                    !bloodGroup && styles.bloodGroupPlaceholder,
-                  ]}
+              <View style={styles.fieldContainer}>
+                <Text style={styles.label}>Phone Number</Text>
+                <TextInput
+                  style={[styles.input, fieldErrors.phone && styles.inputError]}
+                  placeholder="Enter your mobile number"
+                  placeholderTextColor="#999"
+                  value={phone}
+                  onChangeText={(value) => {
+                    setPhone(value);
+                    clearFieldError('phone');
+                  }}
+                  editable={!loading}
+                  keyboardType="phone-pad"
+                />
+                <FormFieldError message={fieldErrors.phone} />
+              </View>
+
+              <View style={styles.fieldContainer}>
+                <Text style={styles.label}>Blood Group</Text>
+                <TouchableOpacity
+                  style={[styles.bloodGroupButton, fieldErrors.bloodGroup && styles.inputError]}
+                  onPress={() => setShowBloodGroupPicker(!showBloodGroupPicker)}
+                  disabled={loading}
                 >
-                  {bloodGroup || 'Select your blood group'}
-                </Text>
-              </TouchableOpacity>
+                  <Text
+                    style={[
+                      styles.bloodGroupButtonText,
+                      !bloodGroup && styles.bloodGroupPlaceholder,
+                    ]}
+                  >
+                    {bloodGroup || 'Select your blood group'}
+                  </Text>
+                </TouchableOpacity>
+                <FormFieldError message={fieldErrors.bloodGroup} />
 
-              {showBloodGroupPicker && (
-                <View style={styles.bloodGroupPicker}>
-                  {BLOOD_GROUPS.map((group) => (
-                    <TouchableOpacity
-                      key={group}
-                      style={styles.bloodGroupOption}
-                      onPress={() => {
-                        setBloodGroup(group);
-                        setShowBloodGroupPicker(false);
-                      }}
-                    >
-                      <Text
-                        style={[
-                          styles.bloodGroupOptionText,
-                          bloodGroup === group && styles.bloodGroupOptionSelected,
-                        ]}
+                {showBloodGroupPicker ? (
+                  <View style={styles.bloodGroupPicker}>
+                    {BLOOD_GROUPS.map((group) => (
+                      <TouchableOpacity
+                        key={group}
+                        style={styles.bloodGroupOption}
+                        onPress={() => {
+                          setBloodGroup(group);
+                          setShowBloodGroupPicker(false);
+                          clearFieldError('bloodGroup');
+                        }}
                       >
-                        {group}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
+                        <Text
+                          style={[
+                            styles.bloodGroupOptionText,
+                            bloodGroup === group && styles.bloodGroupOptionSelected,
+                          ]}
+                        >
+                          {group}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
+
+              <LoadingButton
+                loading={loading}
+                loadingText="Creating account..."
+                onPress={handleRegister}
+              >
+                Create Account
+              </LoadingButton>
             </View>
 
-            <TouchableOpacity
-              style={[styles.registerButton, loading && styles.buttonDisabled]}
-              onPress={handleRegister}
-              disabled={loading}
-            >
-              {loading ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.registerButtonText}>Create Account</Text>
-              )}
-            </TouchableOpacity>
+            <View style={styles.footer}>
+              <Text style={styles.footerText}>Already have an account? </Text>
+              <Text
+                style={styles.loginLink}
+                onPress={() => !loading && router.push('/(auth)/login')}
+              >
+                Login here
+              </Text>
+            </View>
           </View>
-
-          <View style={styles.footer}>
-            <Text style={styles.footerText}>Already have an account? </Text>
-            <TouchableOpacity onPress={handleLoginLink} disabled={loading}>
-              <Text style={styles.loginLink}>Login here</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const styles = {
+  flex: { flex: 1 },
+  safeArea: { flex: 1, backgroundColor: '#f5f5f5' },
+  scrollContent: { flexGrow: 1, paddingBottom: 24 },
   container: {
-    flex: 1,
     padding: 20,
-    justifyContent: 'space-between',
-    backgroundColor: '#f5f5f5',
   },
   header: {
-    marginTop: 30,
-    marginBottom: 30,
+    marginTop: 16,
+    marginBottom: 24,
   },
   title: {
     fontSize: 28,
@@ -266,6 +295,9 @@ const styles = {
     fontSize: 16,
     backgroundColor: '#fff',
     color: '#333',
+  },
+  inputError: {
+    borderColor: '#e74c3c',
   },
   bloodGroupButton: {
     borderWidth: 1,
@@ -304,26 +336,11 @@ const styles = {
     color: '#e74c3c',
     fontWeight: '600',
   },
-  registerButton: {
-    backgroundColor: '#e74c3c',
-    paddingVertical: 14,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 10,
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  registerButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
   footer: {
     flexDirection: 'row',
     justifyContent: 'center',
-    marginBottom: 30,
+    marginTop: 24,
+    flexWrap: 'wrap',
   },
   footerText: {
     color: '#666',

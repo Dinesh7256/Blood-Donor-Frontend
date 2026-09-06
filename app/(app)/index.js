@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -7,172 +7,257 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { useAuth } from '../../src/context/AuthContext.js';
 import { auth } from '../../src/config/firebase.js';
 import { locationService } from '../../src/services/locationService.js';
 import { userApi } from '../../src/api/userApi.js';
 import { donorApi } from '../../src/api/donorApi.js';
-import { requestApi } from '../../src/api/requestApi.js';
+import { BLOOD_GROUPS } from '../../src/constants/bloodGroups.js';
+import {
+  canCreateBloodRequest,
+  getProfileCompletionMessage,
+} from '../../src/utils/profileCompletion.js';
 import {
   resetHomeInitSession,
   tryBeginHomeInitSession,
   markHomeInitSessionCompleted,
   endHomeInitSessionInProgress,
   failHomeInitSession,
+  setHomeInitInFlightPromise,
+  getHomeInitInFlightPromise,
+  isHomeInitCompleted,
 } from '../../src/utils/homeInitSession.js';
-import { logLocationFlow, logLocationError, logBloodRequest, logBloodRequestError } from '../../src/utils/flowLog.js';
+import {
+  logLocationFlow,
+  logLocationError,
+  logHomeFlow,
+} from '../../src/utils/flowLog.js';
+import { getUserFriendlyErrorMessage } from '../../src/utils/errorMessages.js';
+import { captureAuthSession } from '../../src/utils/authSession.js';
+import { shouldContinueHomeInit } from '../../src/utils/homeInitGuards.js';
+import EmptyState from '../../src/components/EmptyState.js';
+import ErrorState from '../../src/components/ErrorState.js';
+import LoadingButton from '../../src/components/LoadingButton.js';
 
-const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
-
-const hasLiveFirebaseSession = async () => {
+const ensureFirebaseSessionForApi = async () => {
   await auth.authStateReady();
-  return !!auth.currentUser;
-};
-
-const waitForLiveFirebaseSession = async (maxAttempts = 10, delayMs = 200) => {
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    await auth.authStateReady();
-    if (auth.currentUser) {
-      return true;
-    }
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  if (!auth.currentUser) {
+    return false;
   }
-  return false;
+  await auth.currentUser.getIdToken();
+  return true;
 };
 
 export default function HomeScreen() {
-  const { logout, isAuthReady, isFirebaseAuthenticated, user } = useAuth();
+  const router = useRouter();
+  const { logout, isAuthReady, isFirebaseAuthenticated, user, refreshUser } = useAuth();
+  const initStartedForUserRef = useRef(null);
 
   const [selectedBloodGroup, setSelectedBloodGroup] = useState('A+');
   const [donors, setDonors] = useState([]);
   const [loading, setLoading] = useState(true);
   const [locationLoading, setLocationLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [lastKnownLocation, setLastKnownLocation] = useState(null);
-  const [requestingDonorId, setRequestingDonorId] = useState(null);
+  const [initFailed, setInitFailed] = useState(false);
+  const [isCreatingRequestNav, setIsCreatingRequestNav] = useState(false);
 
   const isAuthenticated =
     isAuthReady && isFirebaseAuthenticated && Boolean(user?._id);
 
-  // Get location and update backend, then search donors
-  const initializeHome = useCallback(async (bloodGroup, backendUserId) => {
-    if (!tryBeginHomeInitSession(backendUserId)) {
-      logLocationFlow('Home initialization skipped (already in progress or completed)');
-      return;
+  const runHomeInitialization = useCallback(async (bloodGroup, backendUserId, { force = false } = {}) => {
+    const existingPromise = getHomeInitInFlightPromise();
+    if (existingPromise && !force) {
+      logHomeFlow('Waiting for in-flight Home initialisation');
+      return existingPromise;
     }
 
-    logLocationFlow('Home initialization started');
-
-    setLoading(true);
-    setError(null);
-
-    try {
-      setLocationLoading(true);
-      let location;
-      try {
-        location = await locationService.getCurrentLocation();
-      } catch (locationError) {
-        logLocationError('Location permission or GPS failed', locationError);
-        failHomeInitSession();
-        Alert.alert(
-          'Location Required',
-          'Location permission is required to find nearby donors. Please enable location access in settings and try again.',
-          [{ text: 'OK' }]
-        );
-        return;
-      }
-      setLocationLoading(false);
-      setLastKnownLocation(location);
-
-      const hasFirebaseSession = await waitForLiveFirebaseSession();
-      logLocationFlow(`Firebase session ready for location update = ${hasFirebaseSession}`);
-
-      if (!hasFirebaseSession) {
-        failHomeInitSession();
-        Alert.alert(
-          'Authentication',
-          'Sign-in is still completing. Please wait a moment and reopen the app if location cannot be saved.',
-          [{ text: 'OK' }]
-        );
-        return;
-      }
-
-      try {
-        logLocationFlow('Backend location update started');
-        await userApi.updateLocation(location.latitude, location.longitude);
-        logLocationFlow('Backend location update successful');
-      } catch (updateError) {
-        failHomeInitSession();
-        if (!(await hasLiveFirebaseSession())) {
-          logLocationError('Backend location update aborted — Firebase session lost', updateError);
-          return;
-        }
-        logLocationError('Backend location update failed', updateError);
-        Alert.alert(
-          'Error',
-          'Failed to update your location. Please try again.',
-          [{ text: 'OK' }]
-        );
-        return;
-      }
-
-      try {
-        logLocationFlow('Donor search starting');
-        const result = await donorApi.searchDonors(bloodGroup, 10);
-        setDonors(result.data || []);
-        logLocationFlow(`Donor search result count = ${(result.data || []).length}`);
-        markHomeInitSessionCompleted();
-      } catch (searchError) {
-        failHomeInitSession();
-        if (!(await hasLiveFirebaseSession())) {
-          logLocationError('Donor search aborted — Firebase session lost', searchError);
-          return;
-        }
-        logLocationError('Donor search failed', searchError);
-        Alert.alert(
-          'Error',
-          'Failed to search for donors. Please try again.',
-          [{ text: 'OK' }]
-        );
-        setDonors([]);
-      }
-    } catch (err) {
-      failHomeInitSession();
-      logLocationError('Home initialization failed', err);
-      setError('An unexpected error occurred');
-    } finally {
-      setLoading(false);
-      setLocationLoading(false);
-      endHomeInitSessionInProgress();
-    }
-  }, []);
-
-  // Run initialization once when Firebase auth and app user state are ready
-  useEffect(() => {
-    logLocationFlow(`auth ready = ${isAuthReady}`);
-    logLocationFlow(`firebase authenticated = ${isFirebaseAuthenticated}`);
-    logLocationFlow(`backend user exists = ${Boolean(user?._id)}`);
-
-    if (!isAuthenticated || !user?._id) {
-      if (!isAuthenticated) {
-        resetHomeInitSession();
-        logLocationFlow('Home initialization skipped (backend user not ready yet)');
+    if (!tryBeginHomeInitSession(backendUserId, { force })) {
+      if (isHomeInitCompleted()) {
+        logHomeFlow('Home initialisation skipped (already completed)');
+      } else {
+        logHomeFlow('Home initialisation skipped (already in progress)');
       }
       return undefined;
     }
 
-    const timeoutId = setTimeout(() => {
-      void initializeHome(selectedBloodGroup, user._id);
-    }, 0);
+    const sessionContext = captureAuthSession();
 
-    return () => {
-      clearTimeout(timeoutId);
-    };
-  }, [isAuthenticated, user?._id, initializeHome]);
+    const initPromise = (async () => {
+      logHomeFlow('Home initialisation started');
 
-  // Search donors when blood group changes
+      if (!shouldContinueHomeInit(backendUserId, sessionContext)) {
+        logHomeFlow('Home initialisation aborted before start — session ended');
+        return;
+      }
+
+      setLoading(true);
+      setError(null);
+      setInitFailed(false);
+
+      try {
+        setLocationLoading(true);
+        let location;
+        try {
+          location = await locationService.getCurrentLocation();
+        } catch (locationError) {
+          if (!shouldContinueHomeInit(backendUserId, sessionContext)) {
+            logHomeFlow('Home initialisation aborted after location failure — session ended');
+            return;
+          }
+          logLocationError('Location permission or GPS failed', locationError);
+          failHomeInitSession();
+          setInitFailed(true);
+          setError(getUserFriendlyErrorMessage(locationError, 'Unable to get your location. Please try again.'));
+          Alert.alert(
+            'Location Required',
+            getUserFriendlyErrorMessage(locationError, 'Location permission is required to find nearby donors.'),
+            [{ text: 'OK' }]
+          );
+          return;
+        }
+        setLocationLoading(false);
+
+        if (!shouldContinueHomeInit(backendUserId, sessionContext)) {
+          logHomeFlow('Home initialisation aborted after GPS — session ended');
+          return;
+        }
+
+        const hasFirebaseSession = await ensureFirebaseSessionForApi();
+        logLocationFlow(`Firebase session ready for location update = ${hasFirebaseSession}`);
+
+        if (!hasFirebaseSession) {
+          failHomeInitSession();
+          setInitFailed(true);
+          setError('Your session is still completing. Please try again.');
+          Alert.alert(
+            'Authentication',
+            'Sign-in is still completing. Please wait a moment and try again.',
+            [{ text: 'OK' }]
+          );
+          return;
+        }
+
+        try {
+          logLocationFlow('Backend location update started');
+          const locationResponse = await userApi.updateLocation(location.latitude, location.longitude);
+          logLocationFlow('Backend location update successful');
+          if (locationResponse?.success && locationResponse?.data) {
+            if (!shouldContinueHomeInit(backendUserId, sessionContext)) {
+              logHomeFlow('Skipped refreshUser after location update — session ended');
+              return;
+            }
+            await refreshUser(locationResponse.data, sessionContext);
+          }
+        } catch (updateError) {
+          if (!shouldContinueHomeInit(backendUserId, sessionContext)) {
+            logHomeFlow('Home initialisation aborted after location update failure — session ended');
+            return;
+          }
+          failHomeInitSession();
+          setInitFailed(true);
+          logLocationError('Backend location update failed', updateError);
+          const message = getUserFriendlyErrorMessage(
+            updateError,
+            'Failed to update your location. Please try again.'
+          );
+          setError(message);
+          Alert.alert('Error', message, [{ text: 'OK' }]);
+          return;
+        }
+
+        if (!shouldContinueHomeInit(backendUserId, sessionContext)) {
+          logHomeFlow('Home initialisation aborted before donor search — session ended');
+          return;
+        }
+
+        try {
+          logLocationFlow('Donor search starting');
+          const result = await donorApi.searchDonors(bloodGroup, 10);
+          if (!shouldContinueHomeInit(backendUserId, sessionContext)) {
+            logHomeFlow('Home initialisation aborted after donor search — session ended');
+            return;
+          }
+          setDonors(result.data || []);
+          logLocationFlow(`Donor search result count = ${(result.data || []).length}`);
+          markHomeInitSessionCompleted();
+          setInitFailed(false);
+        } catch (searchError) {
+          if (!shouldContinueHomeInit(backendUserId, sessionContext)) {
+            logHomeFlow('Home initialisation aborted after donor search failure — session ended');
+            return;
+          }
+          failHomeInitSession();
+          setInitFailed(true);
+          logLocationError('Donor search failed', searchError);
+          const message = getUserFriendlyErrorMessage(
+            searchError,
+            'Failed to search for donors. Please try again.'
+          );
+          setError(message);
+          Alert.alert('Error', message, [{ text: 'OK' }]);
+          setDonors([]);
+        }
+      } catch (err) {
+        if (!shouldContinueHomeInit(backendUserId, sessionContext)) {
+          logHomeFlow('Home initialisation aborted after unexpected error — session ended');
+          return;
+        }
+        failHomeInitSession();
+        setInitFailed(true);
+        logLocationError('Home initialisation failed', err);
+        setError(getUserFriendlyErrorMessage(err));
+      } finally {
+        if (shouldContinueHomeInit(backendUserId, sessionContext)) {
+          setLoading(false);
+          setLocationLoading(false);
+        }
+        endHomeInitSessionInProgress();
+      }
+    })();
+
+    setHomeInitInFlightPromise(initPromise);
+    return initPromise;
+  }, [refreshUser]);
+
+  const handleRetryHomeInit = useCallback(() => {
+    if (!user?._id) {
+      return;
+    }
+    logHomeFlow('Manual Home initialisation retry requested');
+    void runHomeInitialization(selectedBloodGroup, user._id, { force: true });
+  }, [runHomeInitialization, selectedBloodGroup, user]);
+
+  useEffect(() => {
+    logHomeFlow(`auth ready = ${isAuthReady}`);
+    logHomeFlow(`firebase authenticated = ${isFirebaseAuthenticated}`);
+    logHomeFlow(`backend user exists = ${Boolean(user?._id)}`);
+
+    if (!isAuthenticated || !user?._id) {
+      if (!isAuthenticated) {
+        resetHomeInitSession();
+        initStartedForUserRef.current = null;
+        logHomeFlow('Home initialisation skipped (backend user not ready yet)');
+      }
+      return undefined;
+    }
+
+    if (initStartedForUserRef.current === user._id && isHomeInitCompleted()) {
+      logHomeFlow('Home initialisation skipped (already completed for user)');
+      return undefined;
+    }
+
+    initStartedForUserRef.current = user._id;
+    void runHomeInitialization(selectedBloodGroup, user._id);
+
+    return undefined;
+    // Initial home setup only; blood-group changes use handleBloodGroupChange.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, user?._id, runHomeInitialization]);
+
   const handleBloodGroupChange = useCallback(async (bloodGroup) => {
-    if (!(await hasLiveFirebaseSession())) {
+    if (!(await ensureFirebaseSessionForApi())) {
       return;
     }
 
@@ -184,52 +269,38 @@ export default function HomeScreen() {
       const result = await donorApi.searchDonors(bloodGroup, 10);
       setDonors(result.data || []);
     } catch (err) {
-      if (!(await hasLiveFirebaseSession())) {
-        return;
-      }
-      console.error('Failed to search donors:', err);
-      setError('Failed to search donors');
+      logLocationError('Donor search failed after blood group change', err);
+      setError(getUserFriendlyErrorMessage(err, 'Failed to search donors'));
       setDonors([]);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  const handleBloodRequest = useCallback(
-    async (donor) => {
-      if (!lastKnownLocation) {
-        Alert.alert('Location Required', 'Your location is not available yet. Please wait and try again.');
-        return;
-      }
+  const handleCreateRequest = useCallback(() => {
+    if (isCreatingRequestNav) {
+      return;
+    }
 
-      logBloodRequest('Send button pressed');
-      setRequestingDonorId(donor._id);
+    if (!canCreateBloodRequest(user)) {
+      Alert.alert(
+        'Profile Incomplete',
+        getProfileCompletionMessage(),
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Complete Profile', onPress: () => router.push('/(app)/profile') },
+        ]
+      );
+      return;
+    }
 
-      try {
-        logBloodRequest('API request started');
-        const response = await requestApi.createRequest({
-          bloodGroup: selectedBloodGroup,
-          hospitalName: 'Nearby hospital',
-          location: {
-            latitude: lastKnownLocation.latitude,
-            longitude: lastKnownLocation.longitude,
-          },
-          radius: 10,
-        });
-        logBloodRequest(`Backend response success = ${response?.success === true}`);
-        Alert.alert('Request Sent', 'Nearby eligible donors will be notified.');
-      } catch (requestError) {
-        logBloodRequestError('Blood request failed', requestError);
-        Alert.alert(
-          'Request Failed',
-          requestError.response?.data?.message || 'Could not send the blood request. Please try again.'
-        );
-      } finally {
-        setRequestingDonorId(null);
-      }
-    },
-    [lastKnownLocation, selectedBloodGroup]
-  );
+    setIsCreatingRequestNav(true);
+    router.push({
+      pathname: '/(app)/create-request',
+      params: { bloodGroup: selectedBloodGroup },
+    });
+    setIsCreatingRequestNav(false);
+  }, [isCreatingRequestNav, router, selectedBloodGroup, user]);
 
   const handleLogout = async () => {
     try {
@@ -284,31 +355,34 @@ export default function HomeScreen() {
           {donor.isAvailable ? '✓ Available' : '✗ Not Available'}
         </Text>
       </View>
-      <TouchableOpacity
-        style={[
-          styles.requestButton,
-          requestingDonorId === donor._id && styles.buttonDisabled,
-        ]}
-        onPress={() => handleBloodRequest(donor)}
-        disabled={Boolean(requestingDonorId)}
-      >
-        {requestingDonorId === donor._id ? (
-          <ActivityIndicator color="#fff" size="small" />
-        ) : (
-          <Text style={styles.requestButtonText}>Request Blood</Text>
-        )}
-      </TouchableOpacity>
     </View>
   );
 
   return (
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>Find Donors</Text>
+        <View style={styles.headerTopRow}>
+          <Text style={styles.title}>Find Donors</Text>
+          <View style={styles.headerActions}>
+            <TouchableOpacity style={styles.headerActionButton} onPress={() => router.push('/(app)/requests')}>
+              <Text style={styles.headerActionText}>Requests</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.headerActionButton} onPress={() => router.push('/(app)/my-requests')}>
+              <Text style={styles.headerActionText}>Mine</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.profileButton} onPress={() => router.push('/(app)/profile')}>
+              <Text style={styles.profileButtonText}>Profile</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
         <Text style={styles.subtitle}>
           {locationLoading ? 'Getting your location...' : 'Select blood group'}
         </Text>
+        {!canCreateBloodRequest(user) ? (
+          <Text style={styles.profileHint}>Complete your profile to request blood.</Text>
+        ) : null}
       </View>
 
       {/* Blood Group Selector */}
@@ -324,6 +398,16 @@ export default function HomeScreen() {
         />
       </View>
 
+      <LoadingButton
+        loading={isCreatingRequestNav}
+        loadingText="Opening request form..."
+        onPress={handleCreateRequest}
+        variant="primary"
+        style={styles.createRequestButton}
+      >
+        Request Blood
+      </LoadingButton>
+
       {/* Donor List */}
       <View style={styles.donorListContainer}>
         {loading && !locationLoading ? (
@@ -332,15 +416,14 @@ export default function HomeScreen() {
             <Text style={styles.loadingText}>Finding nearby donors...</Text>
           </View>
         ) : error ? (
-          <View style={styles.errorContainer}>
-            <Text style={styles.errorText}>{error}</Text>
-          </View>
+          <ErrorState message={error} onRetry={initFailed ? handleRetryHomeInit : undefined} />
         ) : donors.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>
-              No nearby donors found for {selectedBloodGroup}
-            </Text>
-          </View>
+          <EmptyState
+            title="No nearby donors"
+            message={`No donors found nearby for ${selectedBloodGroup}. Try another blood group or check again later.`}
+            actionLabel="Try Again"
+            onAction={handleRetryHomeInit}
+          />
         ) : (
           <FlatList
             data={donors}
@@ -357,20 +440,80 @@ export default function HomeScreen() {
         <Text style={styles.logoutButtonText}>Logout</Text>
       </TouchableOpacity>
     </View>
+    </SafeAreaView>
   );
 }
 
 const styles = {
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#f5f5f5',
+  },
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
-    paddingTop: 40,
   },
   header: {
     paddingHorizontal: 20,
     paddingBottom: 20,
     borderBottomWidth: 1,
     borderBottomColor: '#e0e0e0',
+  },
+  headerTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 4,
+    gap: 8,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    justifyContent: 'flex-end',
+    flexShrink: 1,
+  },
+  headerActionButton: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#208AEF',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+  },
+  headerActionText: {
+    color: '#208AEF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  profileButton: {
+    backgroundColor: '#208AEF',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+  },
+  profileButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  profileHint: {
+    marginTop: 8,
+    fontSize: 13,
+    color: '#e67e22',
+  },
+  createRequestButton: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    backgroundColor: '#e74c3c',
+    paddingVertical: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  createRequestButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
   title: {
     fontSize: 28,
@@ -486,6 +629,18 @@ const styles = {
     fontSize: 14,
     color: '#e74c3c',
     textAlign: 'center',
+    marginBottom: 12,
+  },
+  retryButton: {
+    backgroundColor: '#208AEF',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
   emptyContainer: {
     flex: 1,

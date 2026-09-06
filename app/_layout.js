@@ -1,5 +1,6 @@
 import '../src/messaging/registerBackgroundHandler.js';
 import { useEffect } from 'react';
+import { View, ActivityIndicator, Text } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
@@ -7,7 +8,6 @@ import { AuthProvider, useAuth } from '../src/context/AuthContext.js';
 import { usePushNotificationRegistration } from '../src/hooks/usePushNotificationRegistration.js';
 import { useNotificationHandlers } from '../src/hooks/useNotificationHandlers.js';
 
-// Keep the splash screen visible while we load authentication state
 SplashScreen.preventAutoHideAsync().catch(() => {
   // Splash screen might already be hidden, ignore error
 });
@@ -24,7 +24,6 @@ function RootLayoutContent() {
   useNotificationHandlers(isFullyAuthenticated);
 
   useEffect(() => {
-    // Hide splash screen once auth state is determined
     if (!isLoading) {
       SplashScreen.hideAsync().catch(() => {
         // Splash might already be hidden, ignore error
@@ -37,6 +36,12 @@ function RootLayoutContent() {
 
     const inAuthGroup = segments[0] === '(auth)';
     const inAppGroup = segments[0] === '(app)';
+
+    if (__DEV__) {
+      console.log(
+        `[AUTH DEBUG] Layout authentication state = fullyAuthenticated:${isFullyAuthenticated}, firebase:${isFirebaseAuthenticated}, backendUser:${isBackendUserReady}, userId:${user?._id || 'none'}`
+      );
+    }
 
     if (isFullyAuthenticated) {
       if (!inAppGroup) {
@@ -51,10 +56,13 @@ function RootLayoutContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, isLoading, isAuthReady, isFirebaseAuthenticated, isFullyAuthenticated]);
 
-  // While authentication state is being determined, show nothing
-  // (splash screen will be visible)
   if (isLoading) {
-    return null;
+    return (
+      <View style={styles.bootContainer}>
+        <ActivityIndicator size="large" color="#208AEF" />
+        <Text style={styles.bootText}>Restoring session...</Text>
+      </View>
+    );
   }
 
   return (
@@ -64,6 +72,22 @@ function RootLayoutContent() {
     </>
   );
 }
+
+const styles = {
+  bootContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f5f5f5',
+    padding: 24,
+  },
+  bootText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+  },
+};
 
 export default function RootLayout() {
   return (

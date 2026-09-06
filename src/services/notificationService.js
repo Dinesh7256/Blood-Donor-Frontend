@@ -160,16 +160,24 @@ export const notificationService = {
       const permission = await requestNotificationPermission();
 
       if (!permission.granted) {
-        console.log(`[FCM] Permission not granted (${permission.status})`);
+        if (__DEV__) {
+          console.log(`[FCM] Permission not granted (${permission.status})`);
+        }
         return { success: false, reason: permission.status };
       }
 
       const fcmToken = await getFcmRegistrationToken();
-      const tokenSuffix = fcmToken.slice(-6);
-      console.log(`[FCM] Device token obtained ending=${tokenSuffix}`);
+
+      if (__DEV__) {
+        const tokenSuffix = fcmToken.slice(-6);
+        console.log(`[FCM] Device token obtained ending=${tokenSuffix}`);
+      }
 
       const result = await registerFcmTokenWithBackend(fcmToken);
-      console.log(`[FCM] Backend token registration success=${result.registered || result.skipped}`);
+
+      if (__DEV__) {
+        console.log(`[FCM] Backend token registration success=${result.registered || result.skipped}`);
+      }
 
       return {
         success: true,
@@ -177,7 +185,9 @@ export const notificationService = {
         ...result,
       };
     } catch (error) {
-      console.error(`[FCM ERROR] Registration failed — ${error.message}`);
+      if (__DEV__) {
+        console.error(`[FCM ERROR] Registration failed — ${error.message}`);
+      }
       return { success: false, reason: 'error', message: error.message };
     }
   },
@@ -211,25 +221,35 @@ export const notificationService = {
   handleBloodRequestNotification: (remoteMessage) => {
     const data = remoteMessage?.data;
 
-    if (!data || data.type !== 'blood_request') {
+    if (!data?.type || !data?.requestId) {
+      return { handled: false, reason: 'unsupported_type' };
+    }
+
+    if (data.type !== 'blood_request' && data.type !== 'blood_request_accepted') {
       return { handled: false, reason: 'unsupported_type' };
     }
 
     const requestId = data.requestId;
 
-    if (!requestId) {
-      return { handled: false, reason: 'missing_request_id' };
-    }
-
     if (__DEV__) {
-      console.log(`[notifications] Blood request notification received for request ${requestId}`);
+      console.log(`[notifications] ${data.type} notification received for request ${requestId}`);
     }
 
     return {
       handled: true,
+      type: data.type,
       requestId,
       bloodGroup: data.bloodGroup || null,
-      navigationAvailable: false,
+      screen: data.screen || null,
+      navigationAvailable: true,
+      navigationPath:
+        data.type === 'blood_request_accepted' || data.screen === 'request_detail'
+          ? `/(app)/request/${requestId}`
+          : data.type === 'blood_request'
+            ? `/(app)/request/${requestId}`
+            : data.screen === 'requests'
+              ? '/(app)/requests'
+              : `/(app)/request/${requestId}`,
     };
   },
 };

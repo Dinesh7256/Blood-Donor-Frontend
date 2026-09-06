@@ -2,8 +2,20 @@ export const logAuthFlow = (message) => {
   console.log(`[AUTH FLOW] ${message}`);
 };
 
+export const logAuthDebug = (message) => {
+  console.log(`[AUTH DEBUG] ${message}`);
+};
+
 export const logLocationFlow = (message) => {
   console.log(`[LOCATION FLOW] ${message}`);
+};
+
+export const logHomeFlow = (message) => {
+  console.log(`[HOME FLOW] ${message}`);
+};
+
+export const logApiFlow = (message) => {
+  console.log(`[API FLOW] ${message}`);
 };
 
 export const logBloodRequest = (message) => {

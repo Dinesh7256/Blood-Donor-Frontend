@@ -1,7 +1,8 @@
 # Run from blood-donor-frontend after: eas login
-# Uploads Firebase client config to EAS (preview environment).
-# Alternative: values are already in eas.json preview.env for cloud builds.
+# Uploads client config to EAS (preview environment).
+# Values are also inlined in eas.json preview.env for cloud builds.
 
+eas env:create --environment preview --name EXPO_PUBLIC_API_BASE_URL --value "https://blood-donor-finder-looj.onrender.com/api" --visibility plaintext --force
 eas env:create --environment preview --name EXPO_PUBLIC_FIREBASE_API_KEY --value "AIzaSyBxoK_qstUnMeJhIulLXJCDUItTVLJLeVk" --visibility plaintext --force
 eas env:create --environment preview --name EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN --value "blood-finder-b3f71.firebaseapp.com" --visibility plaintext --force
 eas env:create --environment preview --name EXPO_PUBLIC_FIREBASE_PROJECT_ID --value "blood-finder-b3f71" --visibility plaintext --force
