@@ -23,6 +23,7 @@ import {
   validateBloodGroup,
   validateAddress,
   formatIndianPhoneDisplay,
+  normalizeIndianPhone,
 } from '../../src/utils/validation.js';
 import {
   isProfileComplete,
@@ -31,6 +32,8 @@ import {
 } from '../../src/utils/profileCompletion.js';
 import { getUserFriendlyErrorMessage } from '../../src/utils/errorMessages.js';
 import { assertNetworkAvailable } from '../../src/utils/networkGuard.js';
+import { sendPhoneOtp } from '../../src/services/phoneAuthService.js';
+import { getPhoneAuthErrorMessage } from '../../src/utils/phoneAuthErrors.js';
 import LoadingButton from '../../src/components/LoadingButton.js';
 import FormFieldError from '../../src/components/FormFieldError.js';
 
@@ -48,6 +51,7 @@ export default function ProfileScreen() {
   const [saving, setSaving] = useState(false);
   const [updatingLocation, setUpdatingLocation] = useState(false);
   const [fieldErrors, setFieldErrors] = useState({});
+  const [startingVerification, setStartingVerification] = useState(false);
 
   const syncFormFromUser = useCallback((profileUser) => {
     if (!profileUser) {
@@ -145,6 +149,56 @@ export default function ProfileScreen() {
     }
   };
 
+  const handleVerifyPhone = async () => {
+    if (startingVerification || saving || updatingLocation) {
+      return;
+    }
+
+    const phoneResult = validatePhone(phone, { required: true });
+    if (!phoneResult.valid) {
+      setFieldErrors((prev) => ({ ...prev, phone: phoneResult.message }));
+      Alert.alert('Phone Number Required', phoneResult.message);
+      return;
+    }
+
+    if (phoneResult.value !== user?.phone) {
+      Alert.alert(
+        'Save Profile First',
+        'Save your phone number before verifying. Changing your number requires verification again.'
+      );
+      return;
+    }
+
+    if (user?.phoneVerified) {
+      Alert.alert('Already Verified', 'Your phone number is already verified.');
+      return;
+    }
+
+    setStartingVerification(true);
+
+    try {
+      await assertNetworkAvailable();
+      await sendPhoneOtp(phoneResult.value);
+      router.push({
+        pathname: '/(app)/verify-phone',
+        params: { phone: phoneResult.value, sent: '1' },
+      });
+    } catch (verificationError) {
+      Alert.alert(
+        'Verification Error',
+        getPhoneAuthErrorMessage(
+          verificationError,
+          getUserFriendlyErrorMessage(
+            verificationError,
+            'Unable to send the verification code right now. Please try again.'
+          )
+        )
+      );
+    } finally {
+      setStartingVerification(false);
+    }
+  };
+
   const handleUpdateLocation = async () => {
     if (updatingLocation) {
       return;
@@ -175,6 +229,9 @@ export default function ProfileScreen() {
   const missingFieldLabels = getMissingFieldLabels(user);
   const locationStatus = getLocationStatusLabel(user);
   const phoneDisplay = formatIndianPhoneDisplay(user?.phone || phone);
+  const phoneVerified = Boolean(user?.phoneVerified);
+  const normalizedFormPhone = normalizeIndianPhone(phone);
+  const phoneDirty = Boolean(normalizedFormPhone && normalizedFormPhone !== user?.phone);
 
   if (loadingProfile && !user) {
     return (
@@ -205,6 +262,11 @@ export default function ProfileScreen() {
             <Text style={[styles.statusValue, profileComplete ? styles.statusGood : styles.statusWarn]}>
               {profileComplete ? '✓ Profile complete' : '⚠ Complete your profile'}
             </Text>
+            {profileComplete && !phoneVerified ? (
+              <Text style={[styles.summaryHint, styles.statusWarn]}>
+                Phone verification is required before requesting blood.
+              </Text>
+            ) : null}
             {!profileComplete && missingFieldLabels.length ? (
               <View style={styles.missingFieldsBox}>
                 <Text style={styles.missingFieldsTitle}>Missing:</Text>
@@ -224,10 +286,8 @@ export default function ProfileScreen() {
             <Text style={styles.summaryValue}>{user?.email || 'Not set'}</Text>
             <Text style={styles.summaryLabel}>Phone Number</Text>
             <Text style={styles.summaryValue}>{phoneDisplay || 'Not set'}</Text>
-            <Text style={styles.summaryHint}>
-              {user?.phoneVerified
-                ? 'Phone verified'
-                : 'Phone not verified — OTP verification coming in a future release'}
+            <Text style={[styles.summaryHint, phoneVerified ? styles.statusGood : styles.statusWarn]}>
+              Status: {phoneVerified ? '✓ Verified' : '⚠ Not verified'}
             </Text>
             <Text style={styles.summaryLabel}>Blood Group</Text>
             <Text style={styles.summaryValue}>{bloodGroup || 'Not set'}</Text>
@@ -282,6 +342,25 @@ export default function ProfileScreen() {
                 keyboardType="phone-pad"
               />
               <FormFieldError message={fieldErrors.phone} />
+              {!phoneVerified && user?.phone && !phoneDirty ? (
+                <LoadingButton
+                  loading={startingVerification}
+                  loadingText="Sending verification code..."
+                  onPress={handleVerifyPhone}
+                  disabled={saving || updatingLocation}
+                  variant="secondary"
+                >
+                  Verify Phone Number
+                </LoadingButton>
+              ) : null}
+              {!user?.phone ? (
+                <Text style={styles.summaryHint}>Add and save your phone number to verify it.</Text>
+              ) : null}
+              {phoneDirty ? (
+                <Text style={styles.summaryHint}>
+                  Save your profile to apply the new phone number. Verification will reset.
+                </Text>
+              ) : null}
             </View>
 
             <View style={styles.fieldContainer}>

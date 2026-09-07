@@ -8,7 +8,7 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useAuth } from '../../src/context/AuthContext.js';
 import { auth } from '../../src/config/firebase.js';
 import { locationService } from '../../src/services/locationService.js';
@@ -17,7 +17,7 @@ import { donorApi } from '../../src/api/donorApi.js';
 import { BLOOD_GROUPS } from '../../src/constants/bloodGroups.js';
 import {
   canCreateBloodRequest,
-  getProfileCompletionMessage,
+  getBloodRequestBlockMessage,
 } from '../../src/utils/profileCompletion.js';
 import {
   resetHomeInitSession,
@@ -62,23 +62,57 @@ export default function HomeScreen() {
   const [error, setError] = useState(null);
   const [initFailed, setInitFailed] = useState(false);
   const [isCreatingRequestNav, setIsCreatingRequestNav] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const isAuthenticated =
     isAuthReady && isFirebaseAuthenticated && Boolean(user?._id);
+
+  const refreshDonorsOnly = useCallback(async (bloodGroup, backendUserId, sessionContext) => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const result = await donorApi.searchDonors(bloodGroup, 10);
+      if (!shouldContinueHomeInit(backendUserId, sessionContext)) {
+        return;
+      }
+      setDonors(result.data || []);
+      setInitFailed(false);
+    } catch (searchError) {
+      if (!shouldContinueHomeInit(backendUserId, sessionContext)) {
+        return;
+      }
+      setInitFailed(true);
+      setError(
+        getUserFriendlyErrorMessage(searchError, 'Failed to search for donors. Please try again.')
+      );
+      setDonors([]);
+    } finally {
+      if (shouldContinueHomeInit(backendUserId, sessionContext)) {
+        setLoading(false);
+      }
+    }
+  }, []);
 
   const runHomeInitialization = useCallback(async (bloodGroup, backendUserId, { force = false } = {}) => {
     const existingPromise = getHomeInitInFlightPromise();
     if (existingPromise && !force) {
       logHomeFlow('Waiting for in-flight Home initialisation');
-      return existingPromise;
+      setLoading(true);
+      return existingPromise.finally(() => {
+        setLoading(false);
+      });
     }
 
     if (!tryBeginHomeInitSession(backendUserId, { force })) {
-      if (isHomeInitCompleted()) {
-        logHomeFlow('Home initialisation skipped (already completed)');
-      } else {
-        logHomeFlow('Home initialisation skipped (already in progress)');
+      const sessionContext = captureAuthSession();
+
+      if (isHomeInitCompleted() && !force) {
+        logHomeFlow('Home initialisation skipped (already completed) — refreshing donors');
+        return refreshDonorsOnly(bloodGroup, backendUserId, sessionContext);
       }
+
+      logHomeFlow('Home initialisation skipped (already in progress)');
       return undefined;
     }
 
@@ -110,11 +144,6 @@ export default function HomeScreen() {
           failHomeInitSession();
           setInitFailed(true);
           setError(getUserFriendlyErrorMessage(locationError, 'Unable to get your location. Please try again.'));
-          Alert.alert(
-            'Location Required',
-            getUserFriendlyErrorMessage(locationError, 'Location permission is required to find nearby donors.'),
-            [{ text: 'OK' }]
-          );
           return;
         }
         setLocationLoading(false);
@@ -131,11 +160,6 @@ export default function HomeScreen() {
           failHomeInitSession();
           setInitFailed(true);
           setError('Your session is still completing. Please try again.');
-          Alert.alert(
-            'Authentication',
-            'Sign-in is still completing. Please wait a moment and try again.',
-            [{ text: 'OK' }]
-          );
           return;
         }
 
@@ -163,7 +187,6 @@ export default function HomeScreen() {
             'Failed to update your location. Please try again.'
           );
           setError(message);
-          Alert.alert('Error', message, [{ text: 'OK' }]);
           return;
         }
 
@@ -191,12 +214,9 @@ export default function HomeScreen() {
           failHomeInitSession();
           setInitFailed(true);
           logLocationError('Donor search failed', searchError);
-          const message = getUserFriendlyErrorMessage(
-            searchError,
-            'Failed to search for donors. Please try again.'
+          setError(
+            getUserFriendlyErrorMessage(searchError, 'Failed to search for donors. Please try again.')
           );
-          setError(message);
-          Alert.alert('Error', message, [{ text: 'OK' }]);
           setDonors([]);
         }
       } catch (err) {
@@ -219,13 +239,21 @@ export default function HomeScreen() {
 
     setHomeInitInFlightPromise(initPromise);
     return initPromise;
-  }, [refreshUser]);
+  }, [refreshDonorsOnly, refreshUser]);
+
+  useFocusEffect(
+    useCallback(() => {
+      setIsCreatingRequestNav(false);
+      return undefined;
+    }, [])
+  );
 
   const handleRetryHomeInit = useCallback(() => {
     if (!user?._id) {
       return;
     }
     logHomeFlow('Manual Home initialisation retry requested');
+    initStartedForUserRef.current = null;
     void runHomeInitialization(selectedBloodGroup, user._id, { force: true });
   }, [runHomeInitialization, selectedBloodGroup, user]);
 
@@ -243,8 +271,8 @@ export default function HomeScreen() {
       return undefined;
     }
 
-    if (initStartedForUserRef.current === user._id && isHomeInitCompleted()) {
-      logHomeFlow('Home initialisation skipped (already completed for user)');
+    if (initStartedForUserRef.current === user._id) {
+      logHomeFlow('Home initialisation skipped (already attempted for this user session)');
       return undefined;
     }
 
@@ -284,11 +312,11 @@ export default function HomeScreen() {
 
     if (!canCreateBloodRequest(user)) {
       Alert.alert(
-        'Profile Incomplete',
-        getProfileCompletionMessage(),
+        'Action Required',
+        getBloodRequestBlockMessage(user),
         [
           { text: 'Cancel', style: 'cancel' },
-          { text: 'Complete Profile', onPress: () => router.push('/(app)/profile') },
+          { text: 'Go to Profile', onPress: () => router.push('/(app)/profile') },
         ]
       );
       return;
@@ -299,14 +327,21 @@ export default function HomeScreen() {
       pathname: '/(app)/create-request',
       params: { bloodGroup: selectedBloodGroup },
     });
-    setIsCreatingRequestNav(false);
   }, [isCreatingRequestNav, router, selectedBloodGroup, user]);
 
   const handleLogout = async () => {
+    if (isLoggingOut) {
+      return;
+    }
+
+    setIsLoggingOut(true);
+
     try {
       await logout();
     } catch (logoutError) {
       console.error('Logout failed:', logoutError);
+    } finally {
+      setIsLoggingOut(false);
     }
   };
 
@@ -365,17 +400,6 @@ export default function HomeScreen() {
       <View style={styles.header}>
         <View style={styles.headerTopRow}>
           <Text style={styles.title}>Find Donors</Text>
-          <View style={styles.headerActions}>
-            <TouchableOpacity style={styles.headerActionButton} onPress={() => router.push('/(app)/requests')}>
-              <Text style={styles.headerActionText}>Requests</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.headerActionButton} onPress={() => router.push('/(app)/my-requests')}>
-              <Text style={styles.headerActionText}>Mine</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.profileButton} onPress={() => router.push('/(app)/profile')}>
-              <Text style={styles.profileButtonText}>Profile</Text>
-            </TouchableOpacity>
-          </View>
         </View>
         <Text style={styles.subtitle}>
           {locationLoading ? 'Getting your location...' : 'Select blood group'}
@@ -436,8 +460,12 @@ export default function HomeScreen() {
       </View>
 
       {/* Logout Button */}
-      <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-        <Text style={styles.logoutButtonText}>Logout</Text>
+      <TouchableOpacity
+        style={[styles.logoutButton, isLoggingOut && styles.buttonDisabled]}
+        onPress={handleLogout}
+        disabled={isLoggingOut}
+      >
+        <Text style={styles.logoutButtonText}>{isLoggingOut ? 'Logging out...' : 'Logout'}</Text>
       </TouchableOpacity>
     </View>
     </SafeAreaView>

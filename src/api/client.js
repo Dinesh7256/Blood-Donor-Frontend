@@ -1,7 +1,7 @@
 import { create } from 'axios';
 import { API_BASE_URL } from '../constants/config.js';
 import { auth } from '../config/firebase.js';
-import { logApiFlow } from '../utils/flowLog.js';
+import { logApiRequest, logApiSuccess, logApiError } from '../utils/flowLog.js';
 import { notifyUnauthorized } from '../utils/authSession.js';
 
 const PUBLIC_API_PATHS = ['/auth/login', '/auth/register'];
@@ -24,9 +24,10 @@ const setAuthorizationHeader = (config, token) => {
   config.headers.Authorization = `Bearer ${token}`;
 };
 
-// Request interceptor to attach Firebase ID token
 client.interceptors.request.use(
   async (config) => {
+    logApiRequest(config);
+
     if (isPublicRequest(config.url)) {
       return config;
     }
@@ -40,29 +41,30 @@ client.interceptors.request.use(
 
       const idToken = await auth.currentUser.getIdToken();
       setAuthorizationHeader(config, idToken);
-      logApiFlow(`${config.method?.toUpperCase() || 'GET'} ${config.url}`);
     } catch (error) {
-      console.error('Error retrieving Firebase ID token:', error);
+      if (__DEV__) {
+        console.error('[API ERROR] Failed to attach Firebase authorization header');
+      }
       return Promise.reject(error);
     }
 
     return config;
   },
-  (error) => {
-    return Promise.reject(error);
-  }
+  (error) => Promise.reject(error)
 );
 
-// Response interceptor for error handling
 client.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    logApiSuccess(response);
+    return response;
+  },
   (error) => {
+    logApiError(error);
+
     const status = error.response?.status;
 
     if (status === 401 && !isPublicRequest(error.config?.url || '')) {
-      notifyUnauthorized();
-    } else if (status === 401 || status === 403) {
-      console.warn('Unauthorized access:', error.response?.data?.message || error.message);
+      void notifyUnauthorized();
     }
 
     return Promise.reject(error);

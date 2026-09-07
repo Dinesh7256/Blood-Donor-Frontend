@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -18,7 +18,7 @@ import { BLOOD_GROUPS } from '../../src/constants/bloodGroups.js';
 import { validateBloodGroup, validateHospitalName } from '../../src/utils/validation.js';
 import {
   canCreateBloodRequest,
-  getProfileCompletionMessage,
+  getBloodRequestBlockMessage,
 } from '../../src/utils/profileCompletion.js';
 import { getUserFriendlyErrorMessage } from '../../src/utils/errorMessages.js';
 import { assertNetworkAvailable } from '../../src/utils/networkGuard.js';
@@ -44,12 +44,29 @@ export default function CreateRequestScreen() {
   const [showBloodGroupPicker, setShowBloodGroupPicker] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState({});
+  const blockedAlertShownRef = useRef(false);
+
+  useEffect(() => {
+    if (!user?._id || canCreateBloodRequest(user)) {
+      return;
+    }
+
+    if (blockedAlertShownRef.current) {
+      return;
+    }
+
+    blockedAlertShownRef.current = true;
+    Alert.alert('Action Required', getBloodRequestBlockMessage(user), [
+      { text: 'OK', onPress: () => router.back() },
+    ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot guard; avoid re-alert on unrelated user refresh
+  }, [router, user?._id, user?.phoneVerified, user?.profileCompleted]);
 
   const handleSubmit = async () => {
     if (!canCreateBloodRequest(user)) {
-      Alert.alert('Profile Incomplete', getProfileCompletionMessage(), [
+      Alert.alert('Action Required', getBloodRequestBlockMessage(user), [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Complete Profile', onPress: () => router.push('/(app)/profile') },
+        { text: 'Go to Profile', onPress: () => router.push('/(app)/profile') },
       ]);
       return;
     }
@@ -110,16 +127,20 @@ export default function CreateRequestScreen() {
         donorCount > 0
           ? `Blood request sent successfully to ${donorCount} nearby eligible donor${donorCount === 1 ? '' : 's'}.`
           : 'Blood request sent successfully. No eligible donors were found nearby right now.',
-        [{ text: 'OK', onPress: () => router.replace('/(app)/my-requests') }]
+        [{ text: 'OK', onPress: () => router.replace('/(app)/history?tab=mine') }]
       );
     } catch (error) {
       logBloodRequestError('Create request failed', error);
 
       if (error?.response?.status === 403) {
-        Alert.alert('Profile Incomplete', getProfileCompletionMessage(), [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Complete Profile', onPress: () => router.push('/(app)/profile') },
-        ]);
+        Alert.alert(
+          'Action Required',
+          error?.response?.data?.message || getBloodRequestBlockMessage(user),
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Go to Profile', onPress: () => router.push('/(app)/profile') },
+          ]
+        );
         return;
       }
 

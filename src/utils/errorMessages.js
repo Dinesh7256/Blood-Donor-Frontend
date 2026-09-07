@@ -14,11 +14,19 @@ export const getUserFriendlyErrorMessage = (error, fallback = 'Something went wr
   }
 
   if (error.code === 'ERR_NETWORK' || error.message === 'Network Error') {
-    return 'Unable to reach the server. Check your connection and try again.';
+    return 'Unable to connect to the server. Check your connection and try again.';
   }
 
   if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
-    return 'The request is taking longer than expected. Please try again.';
+    return 'The server is taking longer than expected. Please try again.';
+  }
+
+  if (status === 503) {
+    return 'The service is temporarily unavailable. Please try again shortly.';
+  }
+
+  if (status === 502 || status === 504) {
+    return 'The service is temporarily unavailable. Please try again shortly.';
   }
 
   if (status === 409 && serverMessage) {
@@ -29,7 +37,11 @@ export const getUserFriendlyErrorMessage = (error, fallback = 'Something went wr
     return serverMessage;
   }
 
-  if (status === 401 || status === 403) {
+  if (status === 403) {
+    return 'You do not have permission to perform this action.';
+  }
+
+  if (status === 401) {
     return 'Your session has expired. Please log in again.';
   }
 
@@ -37,8 +49,16 @@ export const getUserFriendlyErrorMessage = (error, fallback = 'Something went wr
     return serverMessage;
   }
 
+  if (status === 404) {
+    return 'The requested resource was not found.';
+  }
+
+  if (status === 429) {
+    return 'Too many requests. Please wait a moment and try again.';
+  }
+
   if (status >= 500) {
-    return 'Our server is currently unavailable. Please try again in a moment.';
+    return 'Something went wrong on our server. Please try again.';
   }
 
   if (status === 400 && serverMessage) {
@@ -59,6 +79,10 @@ export const getUserFriendlyErrorMessage = (error, fallback = 'Something went wr
 
   if (error.message?.includes('GPS timeout')) {
     return 'Unable to get your location in time. Please ensure GPS is enabled and try again.';
+  }
+
+  if (error.message === 'Not authenticated') {
+    return 'Your session is still completing. Please try again.';
   }
 
   return fallback;

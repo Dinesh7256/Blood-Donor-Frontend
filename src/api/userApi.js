@@ -30,4 +30,9 @@ export const userApi = {
     });
     return response.data;
   },
+
+  confirmPhoneVerification: async () => {
+    const response = await client.post('/users/me/confirm-phone-verification');
+    return response.data;
+  },
 };

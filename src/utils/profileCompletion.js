@@ -73,10 +73,40 @@ export const isProfileComplete = (user) => {
   return getMissingProfileFieldKeys(user).length === 0;
 };
 
-export const canCreateBloodRequest = (user) => Boolean(user?._id) && isProfileComplete(user);
+export const canRequestBlood = (user) => {
+  if (!user?._id) {
+    return {
+      allowed: false,
+      reason: 'Complete your profile before requesting blood.',
+    };
+  }
+
+  if (!isProfileComplete(user)) {
+    return {
+      allowed: false,
+      reason: getProfileCompletionMessage(),
+    };
+  }
+
+  if (!user.phoneVerified) {
+    return {
+      allowed: false,
+      reason: 'Please verify your phone number before requesting blood.',
+    };
+  }
+
+  return { allowed: true, reason: null };
+};
+
+export const canCreateBloodRequest = (user) => canRequestBlood(user).allowed;
 
 export const getProfileCompletionMessage = () =>
   'Complete your profile before requesting blood.';
+
+export const getBloodRequestBlockMessage = (user) => {
+  const eligibility = canRequestBlood(user);
+  return eligibility.reason || getProfileCompletionMessage();
+};
 
 export const getLocationStatusLabel = (user) => {
   if (hasValidSavedLocation(user)) {

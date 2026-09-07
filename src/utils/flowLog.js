@@ -18,6 +18,46 @@ export const logApiFlow = (message) => {
   console.log(`[API FLOW] ${message}`);
 };
 
+const formatApiPath = (config) => {
+  const base = config?.baseURL || '';
+  const url = config?.url || '';
+  return `${base}${url}`.replace(/([^:]\/)\/+/g, '$1');
+};
+
+export const logApiRequest = (config) => {
+  if (!__DEV__) {
+    return;
+  }
+
+  const method = (config?.method || 'GET').toUpperCase();
+  console.log(`[API REQUEST] ${method} ${formatApiPath(config)}`);
+};
+
+export const logApiSuccess = (response) => {
+  if (!__DEV__) {
+    return;
+  }
+
+  const method = (response?.config?.method || 'GET').toUpperCase();
+  console.log(`[API SUCCESS] ${method} ${formatApiPath(response?.config)} status=${response?.status}`);
+};
+
+export const logApiError = (error) => {
+  if (!__DEV__) {
+    return;
+  }
+
+  const config = error?.config;
+  const method = (config?.method || 'GET').toUpperCase();
+  const status = error?.response?.status || 'none';
+  const code = error?.code || 'none';
+  const message = error?.response?.data?.message || error?.message || 'Unknown error';
+
+  console.error(
+    `[API ERROR] ${method} ${formatApiPath(config)} status=${status} code=${code} message=${message}`
+  );
+};
+
 export const logBloodRequest = (message) => {
   console.log(`[BLOOD REQUEST] ${message}`);
 };

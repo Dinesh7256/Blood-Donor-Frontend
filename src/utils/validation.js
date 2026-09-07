@@ -22,6 +22,11 @@ export const normalizeIndianPhone = (value) => {
   return null;
 };
 
+export const toE164IndianPhone = (value) => {
+  const normalized = normalizeIndianPhone(value);
+  return normalized ? `+91${normalized}` : null;
+};
+
 export const validateName = (value) => {
   const name = typeof value === 'string' ? value.trim() : '';
 

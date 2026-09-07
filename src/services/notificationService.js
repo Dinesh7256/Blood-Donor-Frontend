@@ -225,7 +225,7 @@ export const notificationService = {
       return { handled: false, reason: 'unsupported_type' };
     }
 
-    if (data.type !== 'blood_request' && data.type !== 'blood_request_accepted') {
+    if (data.type !== 'blood_request' && data.type !== 'blood_request_accepted' && data.type !== 'blood_request_cancelled') {
       return { handled: false, reason: 'unsupported_type' };
     }
 
@@ -235,6 +235,26 @@ export const notificationService = {
       console.log(`[notifications] ${data.type} notification received for request ${requestId}`);
     }
 
+    const navigationPath = (() => {
+      if (data.type === 'blood_request_accepted' || data.screen === 'request_detail') {
+        return `/(app)/request/${requestId}`;
+      }
+
+      if (data.type === 'blood_request' && data.screen === 'requests') {
+        return requestId ? `/(app)/history?tab=incoming&requestId=${requestId}` : '/(app)/history?tab=incoming';
+      }
+
+      if (data.type === 'blood_request_cancelled') {
+        return '/(app)/history?tab=incoming';
+      }
+
+      if (data.type === 'blood_request') {
+        return `/(app)/request/${requestId}`;
+      }
+
+      return `/(app)/request/${requestId}`;
+    })();
+
     return {
       handled: true,
       type: data.type,
@@ -242,14 +262,7 @@ export const notificationService = {
       bloodGroup: data.bloodGroup || null,
       screen: data.screen || null,
       navigationAvailable: true,
-      navigationPath:
-        data.type === 'blood_request_accepted' || data.screen === 'request_detail'
-          ? `/(app)/request/${requestId}`
-          : data.type === 'blood_request'
-            ? `/(app)/request/${requestId}`
-            : data.screen === 'requests'
-              ? '/(app)/requests'
-              : `/(app)/request/${requestId}`,
+      navigationPath,
     };
   },
 };

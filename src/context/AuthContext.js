@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { auth } from '../config/firebase.js';
 import { onAuthStateChanged, deleteUser } from '@firebase/auth';
@@ -46,7 +46,7 @@ export const AuthProvider = ({ children }) => {
     return currentUser;
   };
 
-  const syncBackendUserFromProfile = async () => {
+  const syncBackendUserFromProfile = useCallback(async () => {
     logAuthFlow('Backend user synchronisation started');
 
     const response = await withBoundedRetry(
@@ -64,9 +64,9 @@ export const AuthProvider = ({ children }) => {
     await AsyncStorage.setItem('user', JSON.stringify(response.data));
     activeSessionRef.current = startAuthSession(response.data._id);
     return response.data;
-  };
+  }, []);
 
-  const refreshUser = async (nextUser, sessionContext = null) => {
+  const refreshUser = useCallback(async (nextUser, sessionContext = null) => {
     const context = sessionContext || activeSessionRef.current;
 
     if (context?.userId && !isAuthSessionValid(context.userId, context.epoch)) {
@@ -86,7 +86,7 @@ export const AuthProvider = ({ children }) => {
     }
 
     return syncBackendUserFromProfile();
-  };
+  }, [syncBackendUserFromProfile]);
 
   useEffect(() => {
     setUnauthorizedHandler(async () => {
@@ -173,7 +173,7 @@ export const AuthProvider = ({ children }) => {
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [syncBackendUserFromProfile]);
 
   const register = async (email, password, name, phone, bloodGroup) => {
     authOperationInProgress.current = true;

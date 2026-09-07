@@ -8,6 +8,7 @@ let session = {
 };
 
 let unauthorizedHandler = null;
+let unauthorizedInFlight = false;
 
 export const startAuthSession = (userId) => {
   session = {
@@ -37,6 +38,16 @@ export const setUnauthorizedHandler = (handler) => {
   unauthorizedHandler = handler;
 };
 
-export const notifyUnauthorized = () => {
-  unauthorizedHandler?.();
+export const notifyUnauthorized = async () => {
+  if (unauthorizedInFlight || !unauthorizedHandler) {
+    return;
+  }
+
+  unauthorizedInFlight = true;
+
+  try {
+    await unauthorizedHandler();
+  } finally {
+    unauthorizedInFlight = false;
+  }
 };
